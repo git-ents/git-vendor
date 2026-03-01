@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.2](https://github.com/git-ents/git-vendor/compare/v0.0.1...v0.0.2) (2026-03-01)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * git-set-attr bumped from 0.0.1 to 0.0.2
+
 ## 0.0.1 (2026-03-01)
 
 
