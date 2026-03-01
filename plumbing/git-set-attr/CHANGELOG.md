@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.0](https://github.com/git-ents/git-vendor/compare/git-set-attr-v0.0.0...git-set-attr-v0.0.0) (2026-03-01)
+
+
+### Features
+
+* Add executor pattern ([37affe4](https://github.com/git-ents/git-vendor/commit/37affe408841edf4e3a6edc70c56cbf74a13537e))
+* Add trait implementation for `git-set-attr` ([8196918](https://github.com/git-ents/git-vendor/commit/81969185ea009c58a0923e0cd0f49002e9a2d832))
+* CLI scaffolding ([012cc97](https://github.com/git-ents/git-vendor/commit/012cc972095529dee172c6ec98bfab62f01987f7))
+
 ## 0.0.0 (2026-03-01)
 
 
