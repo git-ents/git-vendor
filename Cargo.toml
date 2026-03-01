@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [".", "plumbing/*"]
+
+[workspace.package]
+edition = "2024"
+publish = true
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+git2 = "0.20.4"
+git_filter_tree = "0.1.0"
+
+
+[package]
+name = "git-vendor"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+git2.workspace = true
+git-set-attr = { version = "0.0.0", path = "plumbing/git-set-attr" }
