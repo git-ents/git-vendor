@@ -1,5 +1,5 @@
 use clap::{CommandFactory, Parser};
-use git_vendor::cli::Cli;
+use git_set_attr::cli::Cli;
 use std::path::PathBuf;
 use std::process;
 
@@ -14,7 +14,7 @@ fn main() {
 
     let cli = Cli::parse();
 
-    if let Err(e) = git_vendor::exe::run(&cli) {
+    if let Err(e) = git_set_attr::exe::run(&cli) {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
@@ -51,7 +51,7 @@ fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let mut buffer = Vec::new();
     man.render(&mut buffer)?;
 
-    let man_path = man1_dir.join("git-vendor.1");
+    let man_path = man1_dir.join("git-set-attr.1");
     std::fs::write(&man_path, buffer)?;
 
     let output_dir = output_dir.canonicalize()?;
