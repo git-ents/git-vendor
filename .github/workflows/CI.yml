@@ -129,8 +129,8 @@ jobs:
             ${{ runner.os }}-cargo-build-
       - name: Generate man pages
         run: |
-          cargo run --package git-rewrite -- --generate-man target/debug/man
-          cargo run --package git-filter-tree -- --generate-man target/debug/man
+          cargo run --package git-vendor -- --generate-man target/debug/man
+          cargo run --package git-set-attr -- --generate-man target/debug/man
 
   ci:
     name: CI
