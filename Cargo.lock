@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "git-set-attr"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "git-vendor"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "clap_mangen",
