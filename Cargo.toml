@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
 git2 = "0.20.4"
-git_filter_tree = "0.1.0"
+tempfile = "3"
 
 
 [package]
@@ -34,3 +34,4 @@ clap.workspace = true
 clap_mangen.workspace = true
 git2.workspace = true
 git-set-attr = { version = "0.0.0", path = "plumbing/git-set-attr" }
+tempfile.workspace = true
