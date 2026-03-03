@@ -181,7 +181,33 @@ impl Vendor for Repository {
     }
 
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error> {
-        todo!()
+        let vendors = self.list_vendors()?;
+        let mut updates = HashMap::new();
+
+        for vendor in vendors {
+            match vendor.base.as_ref() {
+                Some(base) => {
+                    let base = git2::Oid::from_str(base)?;
+                    let head = self.find_reference(&vendor.head_ref())?.target().ok_or(
+                        git2::Error::from_str("head ref was not found; this is an internal error"),
+                    )?;
+
+                    if base == head {
+                        updates.insert(vendor, None);
+                    } else {
+                        updates.insert(vendor, Some(head));
+                    }
+                }
+                None => {
+                    let head = self.find_reference(&vendor.head_ref())?.target().ok_or(
+                        git2::Error::from_str("head ref was not found; this is an internal error"),
+                    )?;
+                    updates.insert(vendor, Some(head));
+                }
+            }
+        }
+
+        Ok(updates)
     }
 
     fn merge_vendor(
