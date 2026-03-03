@@ -3,7 +3,7 @@
 pub mod cli;
 pub mod exe;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use git2::Repository;
 
@@ -102,7 +102,10 @@ fn vendors_from_config(cfg: &git2::Config) -> Result<Vec<VendorSource>, git2::Er
 /// A trait which provides methods for vendoring content across repository boundaries.
 pub trait Vendor {
     /// Retrieve the top-level `.gitvendors` file as a `git2::Config` value.
-    fn get_vendor_file(&self) -> Result<git2::Config, git2::Error>;
+    fn vendor_config(&self) -> Result<git2::Config, git2::Error>;
+
+    /// Retrieve all vendored files in a given tree.
+    fn vendored_subtree(&self) -> Result<git2::Tree<'_>, git2::Error>;
 
     /// Return all vendor sources tracked at the commit provided (defaulting to `HEAD`).
     fn list_vendors(&self) -> Result<Vec<VendorSource>, git2::Error>;
@@ -127,7 +130,7 @@ pub trait Vendor {
     /// to the the returned `VendorSource`.
     fn merge_vendor(
         &self,
-        name: &str,
+        vendor: &VendorSource,
         maybe_opts: Option<&mut git2::FetchOptions>,
     ) -> Result<(git2::Commit<'_>, VendorSource), git2::Error>;
 
@@ -158,14 +161,38 @@ fn bail_if_bare(repo: &Repository) -> Result<(), git2::Error> {
     Ok(())
 }
 impl Vendor for Repository {
-    fn get_vendor_file(&self) -> Result<git2::Config, git2::Error> {
+    fn vendor_config(&self) -> Result<git2::Config, git2::Error> {
         bail_if_bare(self)?;
         let cfg = git2::Config::open(&self.path().join(".gitvendors"))?;
         Ok(cfg)
     }
 
+    fn vendored_subtree(&self) -> Result<git2::Tree<'_>, git2::Error> {
+        let head = self.head()?.peel_to_tree()?;
+
+        let mut vendored_entries: Vec<git2::TreeEntry> = Vec::new();
+
+        head.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+            if let Some(attrs) = entry.name().and_then(|name| {
+                self.get_attr(
+                    &PathBuf::from_str(name).ok()?,
+                    "vendored",
+                    git2::AttrCheckFlags::FILE_THEN_INDEX,
+                )
+                .ok()
+            }) {
+                if attrs == Some("true") || attrs == Some("set") {
+                    vendored_entries.push(entry.to_owned());
+                }
+            }
+            git2::TreeWalkResult::Ok
+        })?;
+
+        todo!()
+    }
+
     fn list_vendors(&self) -> Result<Vec<VendorSource>, git2::Error> {
-        let cfg = self.get_vendor_file()?;
+        let cfg = self.vendor_config()?;
         vendors_from_config(&cfg)
     }
 
@@ -177,7 +204,10 @@ impl Vendor for Repository {
         let mut remote = self.remote_anonymous(&vendor.url)?;
         let refspec = format!("{}:{}", vendor.tracking_branch(), vendor.head_ref());
         remote.fetch(&[&refspec], maybe_opts, None)?;
-        self.find_reference(&vendor.head_ref())
+
+        let head = self.find_reference(&vendor.head_ref())?;
+
+        Ok(head)
     }
 
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error> {
@@ -212,9 +242,12 @@ impl Vendor for Repository {
 
     fn merge_vendor(
         &self,
-        _name: &str,
+        vendor: &VendorSource,
         _maybe_opts: Option<&mut git2::FetchOptions>,
     ) -> Result<(git2::Commit<'_>, VendorSource), git2::Error> {
+        let _theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let _ours = self.head()?.peel_to_tree()?;
+
         todo!()
     }
 
@@ -233,7 +266,7 @@ impl Vendor for Repository {
     }
 
     fn get_vendor_by_name(&self, name: &str) -> Result<Option<VendorSource>, git2::Error> {
-        let gitvendors = self.get_vendor_file()?;
+        let gitvendors = self.vendor_config()?;
         VendorSource::from_config(&gitvendors, name)
     }
 }
