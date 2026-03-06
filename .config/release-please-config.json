@@ -15,9 +15,9 @@
   "packages": {
     ".": {
       "include-component-in-tag": false,
-      "exclude-paths": ["plumbing/"]
+      "exclude-paths": ["crates/"]
     },
-    "plumbing/git-set-attr": {
+    "crates/git-set-attr": {
       "extra-files": [
         {
           "type": "toml",
