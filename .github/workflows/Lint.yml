@@ -116,10 +116,46 @@ jobs:
           command: check
           command-arguments: ${{ matrix.checks }} -c .config/deny.toml
 
+  semver-checks:
+    name: Semver checks
+    runs-on: ubuntu-latest
+    if: |
+      startsWith(github.head_ref, 'release-please--') &&
+      !github.event.pull_request.draft
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-semver-checks
+        run: cargo binstall cargo-semver-checks --no-confirm
+      - name: Run semver checks for published crates
+        run: |
+          crate_names=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          published_pkgs=()
+          for crate in $crate_names; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "User-Agent: github-actions-semver-check" \
+              "https://crates.io/api/v1/crates/$crate")
+            if [ "$status" = "200" ]; then
+              echo "✓ '$crate' is published — will run semver-checks"
+              published_pkgs+=("--package" "$crate")
+            else
+              echo "✗ '$crate' is not yet published (HTTP $status) — skipping"
+            fi
+          done
+          if [ "${#published_pkgs[@]}" -gt 0 ]; then
+            cargo semver-checks "${published_pkgs[@]}"
+          else
+            echo "No crates are published yet — skipping semver checks entirely."
+          fi
+
   lint:
     name: Lint
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [pre-commit, validate-pr-title, cargo-deny]
+    needs: [pre-commit, validate-pr-title, cargo-deny, semver-checks]
     runs-on: ubuntu-latest
     steps:
       - run: |
