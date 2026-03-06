@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod exe;
 
+use git_filter_tree::FilterTree;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use git2::Repository;
@@ -132,7 +133,7 @@ pub trait Vendor {
         &self,
         vendor: &VendorSource,
         maybe_opts: Option<&mut git2::FetchOptions>,
-    ) -> Result<(git2::Commit<'_>, VendorSource), git2::Error>;
+    ) -> Result<git2::Index, git2::Error>;
 
     /// Given a vendor's name and a target commit (defaulting to `HEAD`),
     /// return the vendor's `base` reference it it exists. If no such `base`
@@ -244,11 +245,26 @@ impl Vendor for Repository {
         &self,
         vendor: &VendorSource,
         _maybe_opts: Option<&mut git2::FetchOptions>,
-    ) -> Result<(git2::Commit<'_>, VendorSource), git2::Error> {
-        let _theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
-        let _ours = self.head()?.peel_to_tree()?;
+    ) -> Result<git2::Index, git2::Error> {
+        let ours_unfiltered = self.head()?.peel_to_tree()?;
+        let ours = self.filter_by_attributes(&ours_unfiltered, &["vendored"])?;
 
-        todo!()
+        let theirs_unfiltered = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+
+        let theirs = self.filter_by_predicate(
+            &theirs_unfiltered,
+            // TODO support path renaming
+            |repo, path| ours.get_path(path).is_ok(),
+        )?;
+
+        if let Some(base) = self.find_vendor_base(&vendor)? {
+            // three-way merge
+            let base = base.as_object().peel_to_tree()?;
+            Ok(self.merge_trees(&base, &ours, &theirs, None)?)
+        } else {
+            // two-way merge
+            Ok(self.merge_trees(&theirs, &ours, &theirs, None)?)
+        }
     }
 
     fn find_vendor_base(

@@ -35,3 +35,4 @@ clap_mangen.workspace = true
 git2.workspace = true
 git-set-attr = { version = "0.0.2", path = "plumbing/git-set-attr" }
 tempfile.workspace = true
+git-filter-tree = "0.3.0"
