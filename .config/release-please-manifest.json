@@ -1,4 +1,4 @@
 {
-  "crates/git-vendor": "0.0.0",
-  "crates/git-set-attr": "0.0.0"
+  "crates/git-vendor": "0.1.0",
+  "crates/git-set-attr": "0.1.0"
 }
