@@ -254,7 +254,7 @@ impl Vendor for Repository {
         let theirs = self.filter_by_predicate(
             &theirs_unfiltered,
             // TODO support path renaming
-            |repo, path| ours.get_path(path).is_ok(),
+            |_repo, path| ours.get_path(path).is_ok(),
         )?;
 
         if let Some(base) = self.find_vendor_base(&vendor)? {
