@@ -1,4 +1,4 @@
 {
   ".": "0.0.2",
-  "plumbing/git-set-attr": "0.0.2"
+  "crates/git-set-attr": "0.0.2"
 }

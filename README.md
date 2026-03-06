@@ -3,8 +3,8 @@
 *An in-source vendoring alternative to Git submodules and subtrees.*
 
 <!-- rumdl-disable MD013 -->
-[![CI](https://github.com/git-ents/git-vendor/actions/workflows/CI.yml/badge.svg)](https://github.com/git-ents/git-filter/actions/workflows/CI.yml)
-[![CD](https://github.com/git-ents/git-vendor/actions/workflows/CD.yml/badge.svg)](https://github.com/git-ents/git-filter/actions/workflows/CD.yml)
+[![CI](https://github.com/git-ents/git-vendor/actions/workflows/CI.yml/badge.svg)](https://github.com/git-ents/git-vendor/actions/workflows/CI.yml)
+[![CD](https://github.com/git-ents/git-vendor/actions/workflows/CD.yml/badge.svg)](https://github.com/git-ents/git-vendor/actions/workflows/CD.yml)
 <!-- rumdl-enable MD013 -->
 
 ## Overview
