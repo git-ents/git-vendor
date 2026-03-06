@@ -11,9 +11,12 @@
   "pull-request-footer": "This release was generated with [Release Please](https://github.com/googleapis/release-please).",
   "packages": {
     "crates/git-vendor": {
-      "include-component-in-tag": false
+      "include-component-in-tag": false,
+      "release-as": "0.0.1"
     },
-    "crates/git-set-attr": {}
+    "crates/git-set-attr": {
+      "release-as": "0.0.1"
+    }
   },
   "plugins": [{ "type": "sentence-case" }, { "type": "cargo-workspace" }],
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"
