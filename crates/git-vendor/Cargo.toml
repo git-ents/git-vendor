@@ -1,6 +1,6 @@
 [package]
 name = "git-vendor"
-version = "0.0.0"
+version = "0.0.1"
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
@@ -17,6 +17,6 @@ path = "src/main.rs"
 clap.workspace = true
 clap_mangen.workspace = true
 git2.workspace = true
-git-set-attr = { version = "0.0.0", path = "../git-set-attr" }
+git-set-attr = { version = "0.0.1", path = "../git-set-attr" }
 tempfile.workspace = true
 git-filter-tree = "0.3.0"
