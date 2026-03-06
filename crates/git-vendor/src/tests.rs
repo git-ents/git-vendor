@@ -2,7 +2,7 @@
 
 use git2::Config;
 use std::io::Write;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempPath};
 
 use super::VendorSource;
 
@@ -14,15 +14,19 @@ use super::VendorSource;
 /// caller can keep the `NamedTempFile` alive for as long as the `Config` is
 /// needed (dropping the file closes/deletes it, which would invalidate the
 /// config handle on some platforms).
-fn config_from_str(s: &str) -> (NamedTempFile, Config) {
+fn config_from_str(s: &str) -> (TempPath, Config) {
     let mut tmp = NamedTempFile::new().unwrap();
     tmp.write_all(s.as_bytes()).unwrap();
-    let cfg = Config::open(tmp.path()).unwrap();
-    (tmp, cfg)
+    // Close the open file handle before handing the path to libgit2.
+    // On Windows, libgit2 writes config changes via a lockfile rename, which
+    // fails with "Access is denied" when the underlying file is still open.
+    let path = tmp.into_temp_path();
+    let cfg = Config::open(&path).unwrap();
+    (path, cfg)
 }
 
 /// Return a writable `Config` backed by an empty temp file.
-fn empty_config() -> (NamedTempFile, Config) {
+fn empty_config() -> (TempPath, Config) {
     config_from_str("")
 }
 
