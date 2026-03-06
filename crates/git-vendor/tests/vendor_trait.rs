@@ -27,7 +27,17 @@ impl RemoteRepo {
 
     /// `file://`-prefixed URL that libgit2 can fetch from without SSH/HTTPS.
     fn url(&self) -> String {
-        format!("file://{}", self._dir.path().display())
+        // On Windows, Path::display() uses backslashes, which libgit2 then
+        // rejects as "invalid escape" when reading the value back from git
+        // config. Convert to forward slashes for a valid file:// URL.
+        // Windows paths also start with a drive letter ("C:/...") rather than
+        // '/', so an extra leading slash is needed to form a proper file URL.
+        let path = self._dir.path().to_string_lossy().replace('\\', "/");
+        if path.starts_with('/') {
+            format!("file://{}", path)
+        } else {
+            format!("file:///{}", path)
+        }
     }
 
     fn sig() -> Signature<'static> {
