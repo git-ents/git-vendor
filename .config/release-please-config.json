@@ -8,7 +8,7 @@
   "bump-patch-for-minor-pre-major": true,
   "prerelease": true,
   "release-type": "rust",
-  "initial-version": "0.0.0",
+  "initial-version": "0.0.1",
   "draft-pull-request": true,
   "group-pull-request-title-pattern": "chore(release): bump crate versions on `${branch}`",
   "pull-request-footer": "This release was generated with [Release Please](https://github.com/googleapis/release-please).",
