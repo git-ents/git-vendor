@@ -239,11 +239,20 @@ dependencies = [
 [[package]]
 name = "git-filter-tree"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cbd8a79be445b877431a8c3338d4fd9c4128768286cd60f138b5cb759adc828"
 dependencies = [
  "clap",
  "clap_mangen",
+ "git2",
+ "globset",
+]
+
+[[package]]
+name = "git-rewrite"
+version = "0.1.2"
+dependencies = [
+ "clap",
+ "clap_mangen",
+ "git-filter-tree",
  "git2",
  "globset",
 ]
