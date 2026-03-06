@@ -18,7 +18,7 @@ struct RemoteRepo {
 }
 
 impl RemoteRepo {
-    /// Initialise a bare repository that will act as the upstream remote.
+    /// Initialize a bare repository that will act as the upstream remote.
     fn new() -> Self {
         let dir = TempDir::new().unwrap();
         let repo = Repository::init_bare(dir.path()).unwrap();
@@ -113,7 +113,7 @@ struct TestRepo {
 }
 
 impl TestRepo {
-    /// Initialise a fresh non-bare repository with a pre-configured identity.
+    /// Initialize a fresh non-bare repository with a pre-configured identity.
     fn new() -> Self {
         let dir = TempDir::new().unwrap();
         let repo = Repository::init(dir.path()).unwrap();

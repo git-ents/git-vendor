@@ -41,4 +41,3 @@ The `git-set-attr` library can be added to your Rust project via `cargo add`.
 ```shell
 cargo add --git https://github.com/git-ents/git-vendor git-set-attr
 ```
-
