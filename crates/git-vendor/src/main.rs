@@ -1,5 +1,6 @@
 use clap::{CommandFactory, Parser};
-use git_vendor::cli::Cli;
+use git_vendor::cli::{Cli, Command};
+use git_vendor::exe;
 use std::path::PathBuf;
 use std::process;
 
@@ -14,10 +15,118 @@ fn main() {
 
     let cli = Cli::parse();
 
-    if let Err(e) = git_vendor::exe::run(&cli) {
+    if let Err(e) = run(&cli) {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
+}
+
+fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = exe::open_repo(cli.repo.as_deref())?;
+
+    match &cli.command {
+        Command::List => {
+            let vendors = exe::list(&repo)?;
+            if vendors.is_empty() {
+                println!("No vendors configured.");
+            } else {
+                for v in &vendors {
+                    let branch = v.branch.as_deref().unwrap_or("(default)");
+                    let base = v.base.as_deref().unwrap_or("(none)");
+                    println!(
+                        "{}\n  url:    {}\n  branch: {}\n  base:   {}",
+                        v.name, v.url, branch, base,
+                    );
+                }
+            }
+        }
+
+        Command::Add {
+            name,
+            url,
+            branch,
+            pattern,
+            local_root,
+        } => {
+            exe::add(
+                &repo,
+                name,
+                url,
+                branch.as_deref(),
+                pattern,
+                local_root.as_deref(),
+            )?;
+            eprintln!("Added vendor '{name}'.");
+        }
+
+        Command::Fetch { name } => match name {
+            Some(n) => {
+                let oid = exe::fetch_one(&repo, n)?;
+                eprintln!("Fetched '{}' -> {}", n, oid);
+            }
+            None => {
+                let results = exe::fetch_all(&repo)?;
+                if results.is_empty() {
+                    println!("No vendors configured.");
+                } else {
+                    for (vname, oid) in &results {
+                        eprintln!("Fetched '{}' -> {}", vname, oid);
+                    }
+                }
+            }
+        },
+
+        Command::Check => {
+            let statuses = exe::check(&repo)?;
+            if statuses.is_empty() {
+                println!("No vendors configured.");
+            } else {
+                let mut any_updates = false;
+                for s in &statuses {
+                    match s.upstream_oid {
+                        Some(oid) => {
+                            println!("{}: upstream updated ({})", s.name, oid);
+                            any_updates = true;
+                        }
+                        None => println!("{}: up to date", s.name),
+                    }
+                }
+                if !any_updates {
+                    println!("\nAll vendors are up to date.");
+                }
+            }
+        }
+
+        Command::Merge { name } => {
+            let outcomes = match name {
+                Some(n) => {
+                    let outcome = exe::merge_one(&repo, n)?;
+                    vec![(n.clone(), outcome)]
+                }
+                None => exe::merge_all(&repo)?,
+            };
+
+            if outcomes.is_empty() {
+                println!("No vendors configured.");
+            } else {
+                for (vname, outcome) in &outcomes {
+                    match outcome {
+                        exe::MergeOutcome::Clean { merge_commit } => {
+                            eprintln!("'{}' merged cleanly (commit {}).", vname, merge_commit);
+                        }
+                        exe::MergeOutcome::Conflict { .. } => {
+                            eprintln!(
+                                "Conflicts detected for '{}'. Resolve them and commit.",
+                                vname
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Check for `--generate-man <DIR>` before clap parses, so it doesn't
