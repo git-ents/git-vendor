@@ -20,3 +20,4 @@ git2.workspace = true
 git-set-attr = { version = "0.0.1", path = "../git-set-attr" }
 tempfile.workspace = true
 git-filter-tree = "0.3.0"
+globset.workspace = true

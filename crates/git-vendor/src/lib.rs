@@ -4,7 +4,12 @@ pub mod cli;
 pub mod exe;
 
 use git_filter_tree::FilterTree;
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use git_set_attr::SetAttr;
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use git2::Repository;
 
@@ -114,6 +119,14 @@ pub trait Vendor {
     /// Return all vendor sources mapped to the upstream tip OID if it differs from the base tree.
     /// `Some(oid)` means there are unmerged upstream changes at that commit; `None` means up to date.
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error>;
+
+    /// Track a vendor pattern by setting `vendor` and `vendor-prefix` attributes on matching files.
+    fn track_vendor_pattern(
+        &self,
+        vendor: &VendorSource,
+        glob: &str,
+        local_root: &Path,
+    ) -> Result<(), git2::Error>;
 
     /// Fetch the upstream for the given vendor and advance `refs/vendor/$name`.
     /// Returns the updated reference.
@@ -241,30 +254,106 @@ impl Vendor for Repository {
         Ok(updates)
     }
 
+    fn track_vendor_pattern(
+        &self,
+        vendor: &VendorSource,
+        glob: &str,
+        local_root: &Path,
+    ) -> Result<(), git2::Error> {
+        let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
+        // globset matches all files under that directory recursively.
+        let normalized: String;
+        let pat = if glob.ends_with('/') {
+            normalized = format!("{}**", glob);
+            normalized.as_str()
+        } else {
+            glob
+        };
+
+        let mut glob_builder = globset::GlobSetBuilder::new();
+        let g = globset::Glob::new(pat)
+            .map_err(|e| git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e)))?;
+        glob_builder.add(g);
+        let matcher = glob_builder
+            .build()
+            .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+
+        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() != Some(git2::ObjectType::Blob) {
+                return git2::TreeWalkResult::Ok;
+            }
+            let remote_path = PathBuf::from(dir).join(entry.name().unwrap());
+            if !matcher.is_match(&remote_path) {
+                return git2::TreeWalkResult::Ok;
+            }
+            let prefix = remote_path.parent().unwrap_or(Path::new(""));
+            let local_path = local_root.join(entry.name().unwrap());
+            let vendor_attr = format!("vendor={}", vendor.name);
+            let prefix_attr = format!("vendor-prefix={}", prefix.display());
+
+            self.set_attr(
+                &local_path.to_string_lossy(),
+                &[&vendor_attr, &prefix_attr],
+                None,
+            )
+            .unwrap(); // or collect errors
+
+            git2::TreeWalkResult::Ok
+        })?;
+
+        Ok(())
+    }
+
     fn merge_vendor(
         &self,
         vendor: &VendorSource,
         _maybe_opts: Option<&mut git2::FetchOptions>,
     ) -> Result<git2::Index, git2::Error> {
-        let ours_unfiltered = self.head()?.peel_to_tree()?;
-        let ours = self.filter_by_attributes(&ours_unfiltered, &["vendored"])?;
+        let expected_vendor = vendor.name.clone();
+        let ours = self.head()?.peel_to_tree()?;
+        let ours_filtered = self.filter_by_predicate(&ours, |repo, path| {
+            match repo.get_attr(path, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
+                Ok(Some(value)) => value == expected_vendor,
+                _ => false,
+            }
+        })?;
 
-        let theirs_unfiltered = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let mut expected_remote: HashSet<PathBuf> = HashSet::new();
+        ours_filtered.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() != Some(git2::ObjectType::Blob) {
+                return git2::TreeWalkResult::Ok;
+            }
+            let local_path = PathBuf::from(dir).join(entry.name().unwrap());
+            let prefix = self
+                .get_attr(
+                    &local_path,
+                    "vendor-prefix",
+                    git2::AttrCheckFlags::FILE_THEN_INDEX,
+                )
+                .ok()
+                .flatten()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::new());
+            expected_remote.insert(prefix.join(local_path.file_name().unwrap()));
+            git2::TreeWalkResult::Ok
+        })?;
 
-        let theirs = self.filter_by_predicate(
-            &theirs_unfiltered,
-            // TODO support path renaming
-            |_repo, path| ours.get_path(path).is_ok(),
-        )?;
+        let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let theirs_filtered = self.filter_by_predicate(&theirs, |_repo, path| {
+            expected_remote.contains(&PathBuf::from(path))
+        })?;
 
-        if let Some(base) = self.find_vendor_base(&vendor)? {
-            // three-way merge
-            let base = base.as_object().peel_to_tree()?;
-            Ok(self.merge_trees(&base, &ours, &theirs, None)?)
-        } else {
-            // two-way merge
-            Ok(self.merge_trees(&theirs, &ours, &theirs, None)?)
-        }
+        let mut opts = git2::MergeOptions::new();
+        opts.find_renames(true);
+        opts.rename_threshold(50);
+
+        let base = match self.find_vendor_base(&vendor)? {
+            Some(c) => c.as_object().peel_to_tree()?,
+            None => self.find_tree(ours_filtered.id())?,
+        };
+
+        self.merge_trees(&base, &ours_filtered, &theirs_filtered, Some(&opts))
     }
 
     fn find_vendor_base(
