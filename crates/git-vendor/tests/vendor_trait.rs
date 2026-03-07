@@ -541,9 +541,9 @@ fn test_merge_vendor_two_way_no_conflicts() {
     let tr = TestRepo::new();
 
     // Working tree: one file marked as vendored.
-    tr.write_gitattributes("shared.txt vendored\n");
+    tr.write_gitattributes("shared.txt vendor=upstream\n");
     tr.make_head_commit(&[
-        (".gitattributes", b"shared.txt vendored\n"),
+        (".gitattributes", b"shared.txt vendor=upstream\n"),
         ("shared.txt", b"ours content\n"),
     ]);
 
@@ -729,9 +729,9 @@ fn test_end_to_end_fetch_then_merge_two_way_clean() {
     remote.make_commit(&[("shared.txt", b"upstream content\n")], "initial");
 
     // Local HEAD has the same file marked vendored, with our local content.
-    tr.write_gitattributes("shared.txt vendored\n");
+    tr.write_gitattributes("shared.txt vendor=upstream\n");
     tr.make_head_commit(&[
-        (".gitattributes", b"shared.txt vendored\n"),
+        (".gitattributes", b"shared.txt vendor=upstream\n"),
         ("shared.txt", b"our content\n"),
     ]);
 
@@ -759,9 +759,9 @@ fn test_end_to_end_fetch_then_merge_three_way_clean() {
     let base_oid = remote.make_commit(&[("shared.txt", b"line one\n")], "base");
 
     // Local HEAD matches the base content.
-    tr.write_gitattributes("shared.txt vendored\n");
+    tr.write_gitattributes("shared.txt vendor=upstream\n");
     tr.make_head_commit(&[
-        (".gitattributes", b"shared.txt vendored\n"),
+        (".gitattributes", b"shared.txt vendor=upstream\n"),
         ("shared.txt", b"line one\n"),
     ]);
 
@@ -797,9 +797,9 @@ fn test_end_to_end_fetch_then_merge_three_way_conflict_then_resolve() {
     let base_oid = remote.make_commit(&[("shared.txt", b"original\n")], "base");
 
     // Local diverges from base.
-    tr.write_gitattributes("shared.txt vendored\n");
+    tr.write_gitattributes("shared.txt vendor=upstream\n");
     tr.make_head_commit(&[
-        (".gitattributes", b"shared.txt vendored\n"),
+        (".gitattributes", b"shared.txt vendor=upstream\n"),
         ("shared.txt", b"our change\n"),
     ]);
 
@@ -884,9 +884,9 @@ fn test_end_to_end_fetch_then_merge_multiple_files_partial_conflict() {
     );
 
     // Locally we change api.txt but leave readme.txt alone.
-    tr.write_gitattributes("*.txt vendored\n");
+    tr.write_gitattributes("*.txt vendor=upstream\n");
     tr.make_head_commit(&[
-        (".gitattributes", b"*.txt vendored\n"),
+        (".gitattributes", b"*.txt vendor=upstream\n"),
         ("api.txt", b"our api change\n"),
         ("readme.txt", b"readme v1\n"),
     ]);
@@ -975,9 +975,9 @@ fn test_merge_vendor_three_way_clean_merge() {
 
     // Base: the common ancestor content.
     let base_content = b"line one\nline two\n";
-    tr.write_gitattributes("shared.txt vendored\n");
+    tr.write_gitattributes("shared.txt vendor=upstream\n");
     tr.make_head_commit(&[
-        (".gitattributes", b"shared.txt vendored\n"),
+        (".gitattributes", b"shared.txt vendor=upstream\n"),
         ("shared.txt", base_content),
     ]);
 
