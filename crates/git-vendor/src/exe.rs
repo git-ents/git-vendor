@@ -51,8 +51,10 @@ pub fn add(
 
     // Persist to .gitvendors config (create the file if it doesn't exist yet).
     let mut cfg = repo.vendor_config().or_else(|_| {
-        let path = repo.path().join(".gitvendors");
-        git2::Config::open(&path)
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        git2::Config::open(&workdir.join(".gitvendors"))
     })?;
     source.to_config(&mut cfg)?;
 

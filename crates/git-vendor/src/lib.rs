@@ -177,7 +177,10 @@ fn bail_if_bare(repo: &Repository) -> Result<(), git2::Error> {
 impl Vendor for Repository {
     fn vendor_config(&self) -> Result<git2::Config, git2::Error> {
         bail_if_bare(self)?;
-        let cfg = git2::Config::open(&self.path().join(".gitvendors"))?;
+        let workdir = self
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let cfg = git2::Config::open(&workdir.join(".gitvendors"))?;
         Ok(cfg)
     }
 
@@ -292,14 +295,14 @@ impl Vendor for Repository {
             let vendor_attr = format!("vendor={}", vendor.name);
             let prefix_attr = format!("vendor-prefix={}", prefix.display());
 
-            self.set_attr(
+            match self.set_attr(
                 &local_path.to_string_lossy(),
                 &[&vendor_attr, &prefix_attr],
                 None,
-            )
-            .unwrap(); // or collect errors
-
-            git2::TreeWalkResult::Ok
+            ) {
+                Ok(_) => return git2::TreeWalkResult::Ok,
+                Err(_) => return git2::TreeWalkResult::Abort,
+            };
         })?;
 
         Ok(())

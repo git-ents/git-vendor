@@ -137,9 +137,9 @@ impl TestRepo {
         Self { _dir: dir, repo }
     }
 
-    /// Write `content` into `.git/.gitvendors`.
+    /// Write `content` into `.gitvendors`.
     fn write_gitvendors(&self, content: &str) {
-        let path = self.repo.path().join(".gitvendors");
+        let path = self.repo.workdir().unwrap().join(".gitvendors");
         fs::write(path, content).unwrap();
     }
 
