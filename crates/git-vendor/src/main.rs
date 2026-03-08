@@ -48,6 +48,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             branch,
             pattern,
             path,
+            glob,
             strategy_option,
         } => {
             let file_favor = match strategy_option {
@@ -63,6 +64,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 branch.as_deref(),
                 &patterns,
                 path.as_deref(),
+                *glob,
                 file_favor,
             )?;
             match outcome {

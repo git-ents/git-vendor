@@ -133,6 +133,7 @@ pub trait Vendor {
         vendor: &VendorSource,
         globs: &[&str],
         path: &Path,
+        use_globs: bool,
     ) -> Result<(), git2::Error>;
 
     /// Fetch the upstream for the given vendor and advance `refs/vendor/$name`.
@@ -310,6 +311,7 @@ impl Vendor for Repository {
         vendor: &VendorSource,
         globs: &[&str],
         path: &Path,
+        use_globs: bool,
     ) -> Result<(), git2::Error> {
         let workdir = self
             .workdir()
@@ -331,7 +333,7 @@ impl Vendor for Repository {
             })?;
             let matcher = compiled.compile_matcher();
 
-            let mut has_match = false;
+            let mut matched_files: Vec<PathBuf> = Vec::new();
 
             tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
                 if entry.kind() != Some(git2::ObjectType::Blob) {
@@ -339,21 +341,19 @@ impl Vendor for Repository {
                 }
                 let remote_path = PathBuf::from(dir).join(entry.name().unwrap());
                 if matcher.is_match(&remote_path) {
-                    has_match = true;
+                    matched_files.push(remote_path);
                 }
                 git2::TreeWalkResult::Ok
             })?;
 
-            if has_match {
-                let vendor_attr = format!("vendor={}", vendor.name);
-                // Build the local pattern: path + user glob (filename portion).
-                // For a glob like `**/*.c` the gitattributes pattern becomes
-                // `third_party/*.c` (the local path joined with the glob's
-                // filename component).
-                //
-                // Directory globs (`sub/`) expand to `path/sub/**` so the
-                // gitattributes pattern reflects the actual local directory
-                // where vendored files reside.
+            if matched_files.is_empty() {
+                continue;
+            }
+
+            let vendor_attr = format!("vendor={}", vendor.name);
+
+            if use_globs {
+                // --glob: one gitattributes line per glob pattern.
                 let local_pattern = if glob.ends_with('/') {
                     let dir = glob.trim_end_matches('/');
                     path.join(dir).join("**")
@@ -370,6 +370,16 @@ impl Vendor for Repository {
                     &[&vendor_attr],
                     &gitattributes,
                 )?;
+            } else {
+                // Default: one gitattributes line per matched file.
+                for file in &matched_files {
+                    let local_pattern = path.join(file);
+                    self.set_attr(
+                        &local_pattern.to_string_lossy(),
+                        &[&vendor_attr],
+                        &gitattributes,
+                    )?;
+                }
             }
         }
 

@@ -523,7 +523,7 @@ fn commit_tree_to_ref(
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_track_vendor_pattern_root_glob_marks_all_files() {
+fn test_track_vendor_pattern_glob_root_glob_marks_all_files() {
     // Upstream tree has two root-level files.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("a.txt", b"aaa"), ("b.txt", b"bbb")]);
@@ -538,7 +538,7 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
 
     // set_attr resolves `.gitattributes` relative to CWD, so chdir into the repo.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.txt"], Path::new("lib"))
+        repo.track_vendor_pattern(&vendor, &["*.txt"], Path::new("lib"), true)
             .unwrap();
     });
 
@@ -548,10 +548,6 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
         content.contains("lib/*.txt") && content.contains("vendor=upstream"),
         "expected lib/*.txt vendor=upstream in:\n{content}"
     );
-    assert!(
-        !content.contains("vendor-prefix"),
-        "vendor-prefix should be absent for root-level files:\n{content}"
-    );
     // No per-file splatting.
     assert!(
         !content.contains("lib/a.txt") && !content.contains("lib/b.txt"),
@@ -560,7 +556,7 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
 }
 
 #[test]
-fn test_track_vendor_pattern_selective_glob() {
+fn test_track_vendor_pattern_glob_selective_glob() {
     // Upstream tree has a .rs and a .txt file – only .rs should be tracked.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(
@@ -577,7 +573,7 @@ fn test_track_vendor_pattern_selective_glob() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
+        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"), true)
             .unwrap();
     });
 
@@ -594,7 +590,7 @@ fn test_track_vendor_pattern_selective_glob() {
 }
 
 #[test]
-fn test_track_vendor_pattern_nested_directory() {
+fn test_track_vendor_pattern_glob_nested_directory() {
     // Upstream tree: sub/deep.txt
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("sub/deep.txt", b"deep")]);
@@ -609,7 +605,7 @@ fn test_track_vendor_pattern_nested_directory() {
 
     // Use `sub/` glob which should expand to `vendor/sub/**`
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"))
+        repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"), true)
             .unwrap();
     });
 
@@ -624,14 +620,10 @@ fn test_track_vendor_pattern_nested_directory() {
         content.contains("vendor=nested"),
         "expected vendor=nested in:\n{content}"
     );
-    assert!(
-        !content.contains("vendor-prefix"),
-        "vendor-prefix should not be written:\n{content}"
-    );
 }
 
 #[test]
-fn test_track_vendor_pattern_writes_prefix_attribute() {
+fn test_track_vendor_pattern_glob_deep_pattern() {
     // Upstream tree: lib/foo.c
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("lib/foo.c", b"int main(){}")]);
@@ -645,7 +637,7 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["**/*.c"], Path::new("third_party"))
+        repo.track_vendor_pattern(&vendor, &["**/*.c"], Path::new("third_party"), true)
             .unwrap();
     });
 
@@ -655,14 +647,10 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
         content.contains("third_party/*.c") && content.contains("vendor=pfx"),
         "expected third_party/*.c vendor=pfx in:\n{content}"
     );
-    assert!(
-        !content.contains("vendor-prefix"),
-        "vendor-prefix should not be written:\n{content}"
-    );
 }
 
 #[test]
-fn test_track_vendor_pattern_multiple_globs() {
+fn test_track_vendor_pattern_glob_multiple_globs() {
     // Upstream tree has .rs, .toml, and .txt files – only .rs and .toml should be tracked.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(
@@ -683,7 +671,7 @@ fn test_track_vendor_pattern_multiple_globs() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs", "*.toml"], Path::new("lib"))
+        repo.track_vendor_pattern(&vendor, &["*.rs", "*.toml"], Path::new("lib"), true)
             .unwrap();
     });
 
@@ -716,7 +704,7 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
+        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"), false)
             .unwrap();
     });
 
@@ -725,6 +713,54 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     assert!(
         !content.contains("vendor="),
         "no vendor attribute expected:\n{content}"
+    );
+}
+
+#[test]
+fn test_track_vendor_pattern_default_expands_to_per_file() {
+    // Default (use_globs=false): each matched file gets its own gitattributes line.
+    let (repo, tmp) = init_repo_with_gitattributes("");
+    let upstream_tree = build_tree(
+        &repo,
+        &[
+            ("a.txt", b"aaa"),
+            ("sub/b.txt", b"bbb"),
+            ("README.md", b"# hi"),
+        ],
+    );
+    commit_tree_to_ref(&repo, "refs/vendor/expand", &upstream_tree, "vendor tip");
+
+    let vendor = VendorSource {
+        name: "expand".into(),
+        url: "https://example.com/expand.git".into(),
+        branch: None,
+        base: None,
+    };
+
+    with_cwd(tmp.path(), || {
+        repo.track_vendor_pattern(&vendor, &["**/*.txt"], Path::new("."), false)
+            .unwrap();
+    });
+
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    // Per-file entries, not a glob pattern.
+    assert!(
+        content.contains("./a.txt vendor=expand"),
+        "expected ./a.txt entry in:\n{content}"
+    );
+    assert!(
+        content.contains("./sub/b.txt vendor=expand"),
+        "expected ./sub/b.txt entry in:\n{content}"
+    );
+    // No glob pattern.
+    assert!(
+        !content.contains("*.txt"),
+        "should not contain glob pattern:\n{content}"
+    );
+    // Unmatched file should be absent.
+    assert!(
+        !content.contains("README.md"),
+        "README.md should not be tracked:\n{content}"
     );
 }
 
