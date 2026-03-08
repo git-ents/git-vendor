@@ -353,10 +353,12 @@ impl Vendor for Repository {
                 // gitattributes pattern becomes `third_party/*.c` (the local
                 // path joined with the glob's filename component).
                 //
-                // Directory globs (`sub/`) expand to `path/**` since all files
-                // under that prefix are flattened into the local directory.
+                // Directory globs (`sub/`) expand to `path/sub/**` so the
+                // gitattributes pattern reflects the actual local directory
+                // where vendored files reside.
                 let local_pattern = if glob.ends_with('/') {
-                    path.join("**")
+                    let dir = glob.trim_end_matches('/');
+                    path.join(dir).join("**")
                 } else {
                     let glob_filename = Path::new(glob)
                         .file_name()

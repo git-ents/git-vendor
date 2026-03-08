@@ -607,18 +607,18 @@ fn test_track_vendor_pattern_nested_directory() {
         base: None,
     };
 
-    // Use `sub/` glob which should expand to `sub/**`
+    // Use `sub/` glob which should expand to `vendor/sub/**`
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"))
             .unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
-    // Directory glob `sub/` produces pattern `vendor/**` since matched
-    // files are flattened into the local directory.
+    // Directory glob `sub/` produces pattern `vendor/sub/**` reflecting
+    // the actual directory where vendored files reside.
     assert!(
-        content.contains("vendor/**"),
-        "expected vendor/** pattern in:\n{content}"
+        content.contains("vendor/sub/**"),
+        "expected vendor/sub/** pattern in:\n{content}"
     );
     assert!(
         content.contains("vendor=nested"),
