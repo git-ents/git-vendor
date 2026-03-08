@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.1](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.1.0...git-vendor-v0.1.1) (2026-03-08)
+
+
+### Documentation
+
+* Publish with docs.rs metadata ([ca93b0a](https://github.com/git-ents/git-vendor/commit/ca93b0a53aeaa6e4cd84b6529311672d44c989db))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * git-set-attr bumped from 0.1.0 to 0.1.1
+
 ## [0.1.0](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.0.2...git-vendor-v0.1.0) (2026-03-08)
 
 
