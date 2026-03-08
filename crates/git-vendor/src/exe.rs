@@ -115,16 +115,27 @@ pub fn add(
 
 /// Fetch the latest upstream commits for a single vendor.
 ///
-/// Returns the OID that `refs/vendor/<name>` now points to.
-pub fn fetch_one(repo: &Repository, name: &str) -> Result<git2::Oid, Box<dyn std::error::Error>> {
+/// Returns `Some(oid)` if the ref advanced, or `None` if already up-to-date.
+pub fn fetch_one(
+    repo: &Repository,
+    name: &str,
+) -> Result<Option<git2::Oid>, Box<dyn std::error::Error>> {
     let vendor = repo
         .get_vendor_by_name(name)?
         .ok_or_else(|| format!("vendor '{}' not found", name))?;
+    let old_oid = repo
+        .find_reference(&vendor.head_ref())
+        .ok()
+        .and_then(|r| r.target());
     let reference = repo.fetch_vendor(&vendor, None)?;
     let oid = reference
         .target()
         .ok_or_else(|| git2::Error::from_str("fetched ref is symbolic; expected a direct ref"))?;
-    Ok(oid)
+    if old_oid == Some(oid) {
+        Ok(None)
+    } else {
+        Ok(Some(oid))
+    }
 }
 
 /// Fetch the latest upstream commits for every configured vendor.
@@ -136,11 +147,17 @@ pub fn fetch_all(
     let vendors = repo.list_vendors()?;
     let mut results = Vec::with_capacity(vendors.len());
     for v in &vendors {
+        let old_oid = repo
+            .find_reference(&v.head_ref())
+            .ok()
+            .and_then(|r| r.target());
         let reference = repo.fetch_vendor(v, None)?;
         let oid = reference.target().ok_or_else(|| {
             git2::Error::from_str("fetched ref is symbolic; expected a direct ref")
         })?;
-        results.push((v.name.clone(), oid));
+        if old_oid != Some(oid) {
+            results.push((v.name.clone(), oid));
+        }
     }
     Ok(results)
 }

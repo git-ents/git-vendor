@@ -8,6 +8,7 @@
 - Prioritize correctness and challenge assumptions when appropriate.
 - Prioritize pausing early to confirm the output matches expectations.
 - Never write unsolicited summary documents.
+- You may make commits; use `fixup!` and `wip:` as appropriate.
 
 > [!IMPORTANT]
 >
@@ -20,3 +21,4 @@
 
 - When committing, use Conventional Commit style with paragraph styling for the commit message body; use `Assisted-by: $Tool ($Company $Model)` as the final commit message footer where Company can be empty if it's the same as tool.
   - For example, using Zed's Claude Sonnet 4.6 model should produce: `Assisted-by: Zed (Claude Sonnet 4.6)`.
+- Prioritize multiple commits when warranted; otherwise recall that Release Please supports multiple changes via commit footers.

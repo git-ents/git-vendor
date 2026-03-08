@@ -1,4 +1,5 @@
 use clap::{CommandFactory, Parser};
+use git_vendor::Vendor;
 use git_vendor::cli::{self, Cli, Command};
 use git_vendor::exe;
 use std::path::PathBuf;
@@ -83,15 +84,15 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
         Command::Fetch { name } => match name {
             Some(n) => {
-                let oid = exe::fetch_one(&repo, n)?;
-                eprintln!("Fetched '{}' -> {}", n, oid);
+                if let Some(oid) = exe::fetch_one(&repo, n)? {
+                    eprintln!("Fetched '{}' -> {}", n, oid);
+                }
             }
             None => {
-                let results = exe::fetch_all(&repo)?;
-                if results.is_empty() {
+                if repo.list_vendors()?.is_empty() {
                     println!("No vendors configured.");
                 } else {
-                    for (vname, oid) in &results {
+                    for (vname, oid) in &exe::fetch_all(&repo)? {
                         eprintln!("Fetched '{}' -> {}", vname, oid);
                     }
                 }
