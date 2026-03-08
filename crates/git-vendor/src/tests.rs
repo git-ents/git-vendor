@@ -1224,3 +1224,141 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
         "new upstream file b.txt should be in merge index, got: {paths:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Forward-slash correctness (Windows regression tests)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_refresh_vendor_attrs_uses_forward_slashes() {
+    // refresh_vendor_attrs writes per-file entries into .gitattributes.
+    // The paths must use forward slashes even on Windows.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    // Write initial .gitattributes and a nested vendored file, then commit.
+    std::fs::write(tmp.path().join(".gitattributes"), "").unwrap();
+    std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+    std::fs::write(tmp.path().join("sub/file.txt"), "hello").unwrap();
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "initial",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    // Build a merged index containing a nested path.
+    let mut merged_index = git2::Index::new().unwrap();
+    let blob_oid = repo.blob(b"hello").unwrap();
+    merged_index
+        .add(&git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: 5,
+            id: blob_oid,
+            flags: 0,
+            flags_extended: 0,
+            path: b"sub/file.txt".to_vec(),
+        })
+        .unwrap();
+
+    let vendor = VendorSource {
+        name: "fwdslash".into(),
+        url: "https://example.com/fwdslash.git".into(),
+        branch: None,
+        base: None,
+        patterns: vec!["**".into()],
+    };
+
+    with_cwd(tmp.path(), || {
+        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("lib"))
+            .unwrap();
+    });
+
+    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
+    assert!(
+        content.contains("lib/sub/file.txt"),
+        "expected forward-slash path lib/sub/file.txt in:\n{content}"
+    );
+    assert!(
+        !content.contains('\\'),
+        "gitattributes must not contain backslashes:\n{content}"
+    );
+}
+
+#[test]
+fn test_add_vendor_nested_paths_match_correctly() {
+    // add_vendor must match nested upstream paths against HEAD even when
+    // Path separators differ (Windows backslash vs git forward-slash).
+    let (repo, tmp) = init_repo_with_gitattributes("");
+
+    // Add a nested file to HEAD so add_vendor can detect the overlap.
+    std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+    std::fs::write(tmp.path().join("sub/overlap.c"), "// local v1").unwrap();
+    {
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "add local file",
+            &tree,
+            &[&head],
+        )
+        .unwrap();
+    }
+
+    // Build upstream tree with a nested file at the same path.
+    let upstream_tree = build_tree(&repo, &[("sub/overlap.c", b"// upstream v1")]);
+    commit_tree_to_ref(&repo, "refs/vendor/nested", &upstream_tree, "vendor tip");
+
+    let vendor = VendorSource {
+        name: "nested".into(),
+        url: "https://example.com/nested.git".into(),
+        branch: None,
+        base: None,
+        patterns: vec![],
+    };
+
+    with_cwd(tmp.path(), || {
+        let index = repo
+            .add_vendor(&vendor, &["sub/"], Path::new("."), None)
+            .unwrap();
+
+        // The merge should detect both sides and produce a result containing
+        // the nested path (possibly conflicted, but present).
+        let paths: Vec<String> = index
+            .iter()
+            .map(|e| String::from_utf8_lossy(&e.path).to_string())
+            .collect();
+        assert!(
+            paths.contains(&"sub/overlap.c".to_string()),
+            "nested file sub/overlap.c should be in merge index, got: {paths:?}"
+        );
+    });
+}

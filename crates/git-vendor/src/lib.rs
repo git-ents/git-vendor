@@ -13,6 +13,14 @@ use std::{
 
 use git2::Repository;
 
+/// Convert a path to a git-compatible string with forward slashes.
+///
+/// Git patterns (e.g. in `.gitattributes`) always use `/` as the separator,
+/// but `Path::join` and `PathBuf::from` produce `\` on Windows.
+fn to_git_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
 /// Build a [`globset::GlobSet`] from a slice of pattern strings, normalizing
 /// trailing-`/` directory shorthands to `dir/**`.
 fn build_glob_matcher(patterns: &[impl AsRef<str>]) -> Result<globset::GlobSet, git2::Error> {
@@ -371,13 +379,13 @@ impl Vendor for Repository {
             let glob_patterns: Vec<String> = vec![glob.to_string()];
             let matcher = build_glob_matcher(&glob_patterns)?;
 
-            let mut matched_files: Vec<PathBuf> = Vec::new();
+            let mut matched_files: Vec<String> = Vec::new();
 
             tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
                 if entry.kind() != Some(git2::ObjectType::Blob) {
                     return git2::TreeWalkResult::Ok;
                 }
-                let remote_path = PathBuf::from(dir).join(entry.name().unwrap());
+                let remote_path = format!("{}{}", dir, entry.name().unwrap());
                 if matcher.is_match(&remote_path) {
                     matched_files.push(remote_path);
                 }
@@ -391,12 +399,8 @@ impl Vendor for Repository {
             let vendor_attr = format!("vendor={}", vendor.name);
 
             for file in &matched_files {
-                let local_pattern = path.join(file);
-                self.set_attr(
-                    &local_pattern.to_string_lossy(),
-                    &[&vendor_attr],
-                    &gitattributes,
-                )?;
+                let local_pattern = format!("{}/{}", to_git_path(path), file);
+                self.set_attr(&local_pattern, &[&vendor_attr], &gitattributes)?;
             }
         }
 
@@ -421,17 +425,17 @@ impl Vendor for Repository {
         // entries.  This lets merge_trees detect add/add conflicts when a
         // local file already exists at the same path as an incoming vendor
         // file.
-        let mut upstream_paths: HashSet<PathBuf> = HashSet::new();
+        let mut upstream_paths: HashSet<String> = HashSet::new();
         theirs_filtered.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
             if entry.kind() == Some(git2::ObjectType::Blob) {
-                upstream_paths.insert(PathBuf::from(dir).join(entry.name().unwrap()));
+                upstream_paths.insert(format!("{}{}", dir, entry.name().unwrap()));
             }
             git2::TreeWalkResult::Ok
         })?;
 
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered =
-            self.filter_by_predicate(&ours, |_repo, p| upstream_paths.contains(&PathBuf::from(p)))?;
+            self.filter_by_predicate(&ours, |_repo, p| upstream_paths.contains(&*to_git_path(p)))?;
 
         // Two-way merge: empty ancestor so that both sides look like pure
         // additions.  If the same path exists in both ours and theirs with
@@ -541,7 +545,7 @@ impl Vendor for Repository {
         sorted.sort();
         for file in sorted {
             let local_pattern = path.join(&file);
-            let line = format!("{} {}", local_pattern.to_string_lossy(), vendor_attr);
+            let line = format!("{} {}", to_git_path(&local_pattern), vendor_attr);
             lines.push(line);
         }
 
