@@ -232,14 +232,23 @@ pub fn rm(repo: &Repository, name: &str) -> Result<(), Box<dyn std::error::Error
         }
     }
 
-    // 5. Mark each vendored file as a "deleted by them" conflict.
-    //    Stage 1 (base) + stage 2 (ours) present, stage 3 (theirs) absent.
+    // 5. For each vendored file, either remove it outright (if empty) or
+    //    mark it as a "deleted by them" conflict.
     for entry in &vendored_entries {
         let path = std::str::from_utf8(&entry.path)
             .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
 
         // Remove the clean stage-0 entry first.
         index.remove(Path::new(path), 0)?;
+
+        if entry.file_size == 0 {
+            // Empty file — just delete from working tree, no conflict needed.
+            let abs = workdir.join(path);
+            if abs.exists() {
+                std::fs::remove_file(&abs)?;
+            }
+            continue;
+        }
 
         let make_entry = |stage: u16| git2::IndexEntry {
             ctime: entry.ctime,
