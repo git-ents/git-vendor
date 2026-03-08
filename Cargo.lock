@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "git-vendor"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_mangen",
