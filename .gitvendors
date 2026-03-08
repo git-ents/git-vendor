@@ -1,0 +1,3 @@
+[vendor "git-rewrite"]
+	url = https://github.com/git-ents/git-rewrite.git
+	base = 39f7f9a5085461957e45abab7e5728201e0d9a43

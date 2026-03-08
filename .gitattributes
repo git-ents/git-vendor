@@ -1,0 +1,2 @@
+./.config vendor=git-rewrite vendor-prefix=.config
+./.github vendor=git-rewrite vendor-prefix=.github/workflows
