@@ -358,29 +358,35 @@ impl Vendor for Repository {
         let theirs_filtered =
             self.filter_by_predicate(&theirs, |_repo, entry_path| matcher.is_match(entry_path))?;
 
-        // Build ours_filtered from HEAD for files already attributed to this
-        // vendor (will typically be empty on initial add).
-        let expected_vendor = vendor.name.clone();
-        let ours = self.head()?.peel_to_tree()?;
-        let ours_filtered = self.filter_by_predicate(&ours, |repo, p| {
-            match repo.get_attr(p, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
-                Ok(Some(value)) => value == expected_vendor,
-                _ => false,
+        // Collect upstream paths so we can filter HEAD to only overlapping
+        // entries.  This lets merge_trees detect add/add conflicts when a
+        // local file already exists at the same path as an incoming vendor
+        // file.
+        let mut upstream_paths: HashSet<PathBuf> = HashSet::new();
+        theirs_filtered.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() == Some(git2::ObjectType::Blob) {
+                upstream_paths.insert(PathBuf::from(dir).join(entry.name().unwrap()));
             }
+            git2::TreeWalkResult::Ok
         })?;
+
+        let ours = self.head()?.peel_to_tree()?;
+        let ours_filtered =
+            self.filter_by_predicate(&ours, |_repo, p| upstream_paths.contains(&PathBuf::from(p)))?;
+
+        // Two-way merge: empty ancestor so that both sides look like pure
+        // additions.  If the same path exists in both ours and theirs with
+        // different content, git2 will report an add/add conflict.
+        let empty_tree = {
+            let empty_oid = self.treebuilder(None)?.write()?;
+            self.find_tree(empty_oid)?
+        };
 
         let mut opts = git2::MergeOptions::new();
         opts.find_renames(true);
         opts.rename_threshold(50);
 
-        // Use ours_filtered as the base so that all of theirs_filtered shows
-        // up as new content to be added.
-        self.merge_trees(
-            &ours_filtered,
-            &ours_filtered,
-            &theirs_filtered,
-            Some(&opts),
-        )
+        self.merge_trees(&empty_tree, &ours_filtered, &theirs_filtered, Some(&opts))
     }
 
     fn merge_vendor(

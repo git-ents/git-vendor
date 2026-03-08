@@ -29,7 +29,7 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 /// `.gitattributes` are written to the working tree and staged in the index,
 /// but no commit is created.  The caller (or user) is expected to commit.
 ///
-/// Returns the `VendorSource` with its `base` set to the fetched upstream tip.
+/// Returns the updated `VendorSource` wrapped in a [`MergeOutcome`].
 ///
 /// * `name`    – unique identifier stored in `.gitvendors`
 /// * `url`     – remote URL to vendor from
@@ -43,7 +43,7 @@ pub fn add(
     branch: Option<&str>,
     pattern: &str,
     path: Option<&Path>,
-) -> Result<VendorSource, Box<dyn std::error::Error>> {
+) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     if repo.get_vendor_by_name(name)?.is_some() {
         return Err(format!("vendor '{}' already exists", name).into());
     }
@@ -92,6 +92,13 @@ pub fn add(
         updated.to_config(&mut cfg)?;
     }
 
+    if merged_index.has_conflicts() {
+        return Ok(MergeOutcome::Conflict {
+            index: merged_index,
+            vendor: updated,
+        });
+    }
+
     // Write each merged entry to the working directory and stage it.
     let mut repo_index = repo.index()?;
     for entry in merged_index.iter() {
@@ -118,7 +125,7 @@ pub fn add(
     }
     repo_index.write()?;
 
-    Ok(updated)
+    Ok(MergeOutcome::Clean { vendor: updated })
 }
 
 /// Fetch the latest upstream commits for a single vendor.

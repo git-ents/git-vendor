@@ -49,7 +49,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             path,
         } => {
             let name = name.as_deref().unwrap_or_else(|| cli::name_from_url(url));
-            let vendor = exe::add(
+            let outcome = exe::add(
                 &repo,
                 name,
                 url,
@@ -57,11 +57,22 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 pattern,
                 path.as_deref(),
             )?;
-            eprintln!(
-                "Added vendor '{}' (base {}).",
-                vendor.name,
-                vendor.base.as_deref().unwrap_or("(none)"),
-            );
+            match outcome {
+                exe::MergeOutcome::Clean { vendor } => {
+                    eprintln!(
+                        "Added vendor '{}' (base {}).",
+                        vendor.name,
+                        vendor.base.as_deref().unwrap_or("(none)"),
+                    );
+                }
+                exe::MergeOutcome::Conflict { vendor, .. } => {
+                    eprintln!(
+                        "Added vendor '{}' (base {}) with conflicts",
+                        vendor.name,
+                        vendor.base.as_deref().unwrap_or("(none)"),
+                    );
+                }
+            }
         }
 
         Command::Fetch { name } => match name {
