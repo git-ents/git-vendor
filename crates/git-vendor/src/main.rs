@@ -100,8 +100,16 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         },
 
-        Command::Check => {
-            let statuses = exe::check(&repo)?;
+        Command::Rm { name } => {
+            exe::rm(&repo, name)?;
+            eprintln!("Removed vendor '{}'.", name);
+            eprintln!("Vendored files are marked as conflicts. Resolve with:");
+            eprintln!("  git rm <file>    # accept deletion");
+            eprintln!("  git add <file>   # keep file");
+        }
+
+        Command::Status => {
+            let statuses = exe::status(&repo)?;
             if statuses.is_empty() {
                 println!("No vendors configured.");
             } else {
@@ -117,6 +125,17 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if !any_updates {
                     println!("\nAll vendors are up to date.");
+                }
+            }
+        }
+
+        Command::Prune => {
+            let pruned = exe::prune(&repo)?;
+            if pruned.is_empty() {
+                println!("No orphaned vendor refs found.");
+            } else {
+                for name in &pruned {
+                    eprintln!("Pruned refs/vendor/{}", name);
                 }
             }
         }

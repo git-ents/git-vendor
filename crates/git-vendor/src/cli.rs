@@ -86,8 +86,17 @@ pub enum Command {
         name: Option<String>,
     },
 
-    /// Check which vendors have unmerged upstream changes.
-    Check,
+    /// Remove a vendor source and its associated refs and attributes.
+    Rm {
+        /// Vendor name to remove.
+        name: String,
+    },
+
+    /// Show which vendors have unmerged upstream changes.
+    Status,
+
+    /// Clean up refs/vendor/* refs that have no corresponding entry in .gitvendors.
+    Prune,
 
     /// Merge upstream changes for one or all vendors.
     Merge {

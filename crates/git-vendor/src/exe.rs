@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use git2::Repository;
@@ -162,7 +163,7 @@ pub fn fetch_all(
     Ok(results)
 }
 
-/// Per-vendor update status returned by [`check`].
+/// Per-vendor update status returned by [`status`].
 #[derive(Debug)]
 pub struct VendorStatus {
     pub name: String,
@@ -173,7 +174,7 @@ pub struct VendorStatus {
 
 /// Check every configured vendor and report whether it has unmerged upstream
 /// changes.
-pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
+pub fn status(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
     let statuses = repo.check_vendors()?;
     let mut out: Vec<VendorStatus> = statuses
         .into_iter()
@@ -184,6 +185,223 @@ pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error:
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
+}
+
+/// Remove a vendor source: delete its `.gitvendors` entry, remove its
+/// `refs/vendor/<name>` ref, remove matching lines from `.gitattributes`
+/// files, and mark vendored files as "deleted by them" conflicts in the
+/// index.
+///
+/// The vendored files are left in the working tree.  The user resolves
+/// each conflict by either accepting the deletion (`git rm <file>`) or
+/// keeping the file (`git add <file>`).
+pub fn rm(repo: &Repository, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let vendor = repo
+        .get_vendor_by_name(name)?
+        .ok_or_else(|| format!("vendor '{}' not found", name))?;
+
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+
+    // Collect vendored file index entries *before* we remove gitattributes,
+    // because we rely on the `vendor=<name>` attribute to identify them.
+    let vendored_entries = collect_vendored_entries(repo, name)?;
+
+    // 1. Remove the vendor section from .gitvendors.
+    let vendors_path = workdir.join(".gitvendors");
+    if vendors_path.exists() {
+        remove_vendor_from_gitvendors(&vendors_path, name)?;
+    }
+
+    // 2. Delete refs/vendor/<name>.
+    if let Ok(mut reference) = repo.find_reference(&vendor.head_ref()) {
+        reference.delete()?;
+    }
+
+    // 3. Remove gitattributes lines that reference this vendor.
+    remove_vendor_attrs(workdir, name)?;
+
+    // 4. Stage .gitvendors (and any affected .gitattributes).
+    let mut index = repo.index()?;
+    index.add_path(Path::new(".gitvendors"))?;
+    for entry in find_gitattributes(workdir) {
+        let rel = entry.strip_prefix(workdir).unwrap_or(&entry);
+        if rel.exists() || workdir.join(rel).exists() {
+            index.add_path(rel)?;
+        }
+    }
+
+    // 5. Mark each vendored file as a "deleted by them" conflict.
+    //    Stage 1 (base) + stage 2 (ours) present, stage 3 (theirs) absent.
+    for entry in &vendored_entries {
+        let path = std::str::from_utf8(&entry.path)
+            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
+
+        // Remove the clean stage-0 entry first.
+        index.remove(Path::new(path), 0)?;
+
+        let make_entry = |stage: u16| git2::IndexEntry {
+            ctime: entry.ctime,
+            mtime: entry.mtime,
+            dev: entry.dev,
+            ino: entry.ino,
+            mode: entry.mode,
+            uid: entry.uid,
+            gid: entry.gid,
+            file_size: entry.file_size,
+            id: entry.id,
+            flags: (entry.flags & 0x0FFF) | (stage << 12),
+            flags_extended: entry.flags_extended,
+            path: entry.path.clone(),
+        };
+
+        // Stage 1 — ancestor (base).
+        index.add(&make_entry(1))?;
+        // Stage 2 — ours (identical content).
+        index.add(&make_entry(2))?;
+        // No stage 3 → "deleted by them".
+    }
+
+    index.write()?;
+
+    Ok(())
+}
+
+/// Collect stage-0 index entries for files attributed to the given vendor.
+fn collect_vendored_entries(
+    repo: &Repository,
+    name: &str,
+) -> Result<Vec<git2::IndexEntry>, Box<dyn std::error::Error>> {
+    let index = repo.index()?;
+    let mut entries = Vec::new();
+    for entry in index.iter() {
+        let stage = (entry.flags >> 12) & 0x3;
+        if stage != 0 {
+            continue;
+        }
+        let path = std::str::from_utf8(&entry.path)
+            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
+        match repo.get_attr(
+            Path::new(path),
+            "vendor",
+            git2::AttrCheckFlags::FILE_THEN_INDEX,
+        ) {
+            Ok(Some(value)) if value == name => entries.push(entry),
+            _ => {}
+        }
+    }
+    Ok(entries)
+}
+
+/// Prune `refs/vendor/*` refs that have no corresponding entry in
+/// `.gitvendors`.
+///
+/// Returns the names of pruned refs.
+pub fn prune(repo: &Repository) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let vendors = repo.list_vendors()?;
+    let known: HashSet<String> = vendors.into_iter().map(|v| v.name).collect();
+
+    let mut pruned = Vec::new();
+    for reference in repo.references_glob("refs/vendor/*")? {
+        let reference = reference?;
+        let refname = reference.name().unwrap_or("").to_string();
+        let vendor_name = refname.strip_prefix("refs/vendor/").unwrap_or("");
+        if !vendor_name.is_empty() && !known.contains(vendor_name) {
+            pruned.push(vendor_name.to_string());
+        }
+    }
+
+    for name in &pruned {
+        let refname = format!("refs/vendor/{}", name);
+        if let Ok(mut r) = repo.find_reference(&refname) {
+            r.delete()?;
+        }
+    }
+
+    Ok(pruned)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for `rm`
+// ---------------------------------------------------------------------------
+
+/// Remove the `[vendor "<name>"]` section (and its keys) from a
+/// `.gitvendors` file, rewriting it in place.
+fn remove_vendor_from_gitvendors(
+    path: &Path,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(path)?;
+    let header = format!("[vendor \"{}\"]", name);
+    let mut out = String::new();
+    let mut skip = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == header {
+            skip = true;
+            continue;
+        }
+        // A new section header ends the skip region.
+        if skip && trimmed.starts_with('[') {
+            skip = false;
+        }
+        if !skip {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+/// Walk the working tree for `.gitattributes` files, returning their absolute
+/// paths.
+fn find_gitattributes(workdir: &Path) -> Vec<std::path::PathBuf> {
+    let mut results = Vec::new();
+    fn walk(dir: &Path, results: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip .git directory.
+                if path.file_name().map_or(false, |n| n == ".git") {
+                    continue;
+                }
+                walk(&path, results);
+            } else if path.file_name().map_or(false, |n| n == ".gitattributes") {
+                results.push(path);
+            }
+        }
+    }
+    walk(workdir, &mut results);
+    results
+}
+
+/// Remove lines containing `vendor=<name>` from all `.gitattributes` files
+/// under the working tree.
+fn remove_vendor_attrs(workdir: &Path, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let needle = format!("vendor={}", name);
+    for attr_path in find_gitattributes(workdir) {
+        let content = std::fs::read_to_string(&attr_path)?;
+        let filtered: Vec<&str> = content
+            .lines()
+            .filter(|line| !line.split_whitespace().any(|token| token == needle))
+            .collect();
+        // Only rewrite if something changed.
+        if filtered.len() < content.lines().count() {
+            let mut out = filtered.join("\n");
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            std::fs::write(&attr_path, out)?;
+        }
+    }
+    Ok(())
 }
 
 /// Result of a single vendor merge.
