@@ -625,8 +625,8 @@ fn test_track_vendor_pattern_nested_directory() {
         "expected vendor=nested in:\n{content}"
     );
     assert!(
-        content.contains("vendor-prefix=sub"),
-        "expected vendor-prefix=sub in:\n{content}"
+        !content.contains("vendor-prefix"),
+        "vendor-prefix should not be written:\n{content}"
     );
 }
 
@@ -656,8 +656,8 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
         "expected third_party/*.c vendor=pfx in:\n{content}"
     );
     assert!(
-        content.contains("vendor-prefix=lib"),
-        "expected vendor-prefix=lib in:\n{content}"
+        !content.contains("vendor-prefix"),
+        "vendor-prefix should not be written:\n{content}"
     );
 }
 
@@ -758,7 +758,7 @@ fn commit_workdir(
 }
 
 /// Set up a local repo whose HEAD contains:
-///   - `.gitattributes` with vendor/vendor-prefix attrs for given files
+///   - `.gitattributes` with `vendor` attrs for given files
 ///   - the vendored files themselves
 ///
 /// Also creates `refs/vendor/<name>` pointing at a commit with the upstream
@@ -767,9 +767,9 @@ fn commit_workdir(
 /// Returns `(repo, tempdir, vendor_source)`.
 fn setup_merge_scenario(
     vendor_name: &str,
-    // (local_path, content, remote_prefix) – the local file, its content, and
-    // the directory prefix in the upstream tree.
-    local_files: &[(&str, &[u8], &str)],
+    // (local_path, content) – the local file and its content.
+    // Local paths must match the corresponding upstream paths.
+    local_files: &[(&str, &[u8])],
     // (remote_path, content) – full paths in the upstream tree.
     remote_files: &[(&str, &[u8])],
 ) -> (git2::Repository, tempfile::TempDir, VendorSource) {
@@ -778,16 +778,14 @@ fn setup_merge_scenario(
 
     // Build .gitattributes content
     let mut attrs = String::new();
-    for &(local_path, _, prefix) in local_files {
-        attrs.push_str(&format!(
-            "{local_path} vendor={vendor_name} vendor-prefix={prefix}\n"
-        ));
+    for &(local_path, _) in local_files {
+        attrs.push_str(&format!("{local_path} vendor={vendor_name}\n"));
     }
 
     std::fs::write(tmp.path().join(".gitattributes"), &attrs).unwrap();
 
     // Write local vendored files to the working tree
-    for &(local_path, content, _) in local_files {
+    for &(local_path, content) in local_files {
         let full = tmp.path().join(local_path);
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -841,7 +839,7 @@ fn test_merge_vendor_no_base_identical_content() {
     // Local and upstream have identical content → merge index has no conflicts.
     let (repo, _tmp, vendor) = setup_merge_scenario(
         "lib",
-        &[("vendor/hello.c", b"int main(){}", "src")],
+        &[("src/hello.c", b"int main(){}")],
         &[("src/hello.c", b"int main(){}")],
     );
 
@@ -859,7 +857,7 @@ fn test_merge_vendor_no_base_upstream_changed() {
     // fast-forward-style merge that picks up the upstream change cleanly.
     let (repo, _tmp, vendor) = setup_merge_scenario(
         "ext",
-        &[("third_party/util.h", b"// v1", "include")],
+        &[("include/util.h", b"// v1")],
         &[("include/util.h", b"// v2")],
     );
 
@@ -881,12 +879,11 @@ fn test_merge_vendor_with_base_clean_merge() {
     let vendor_name = "clean";
 
     // .gitattributes
-    let attrs = "vendor/a.txt vendor=clean vendor-prefix=\n";
+    let attrs = "a.txt vendor=clean\n";
     std::fs::write(tmp.path().join(".gitattributes"), attrs).unwrap();
 
     // Original local file
-    std::fs::create_dir_all(tmp.path().join("vendor")).unwrap();
-    std::fs::write(tmp.path().join("vendor/a.txt"), "line1\nline2\nline3\n").unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "line1\nline2\nline3\n").unwrap();
 
     // Initial commit (this is our "base" state)
     let mut index = repo.index().unwrap();
@@ -901,7 +898,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         .unwrap();
 
     // Now update local: change line1 → lineA (ours diverges)
-    std::fs::write(tmp.path().join("vendor/a.txt"), "lineA\nline2\nline3\n").unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "lineA\nline2\nline3\n").unwrap();
     let base_commit = repo.find_commit(base_oid).unwrap();
     commit_workdir(&repo, "local change", &[&base_commit]);
 
@@ -953,8 +950,7 @@ fn test_merge_vendor_conflict() {
 
     let vendor_name = "conflict";
 
-    // vendor-prefix is empty so ours_filtered path == remote path == base path
-    let attrs = "f.txt vendor=conflict vendor-prefix=\n";
+    let attrs = "f.txt vendor=conflict\n";
     std::fs::write(tmp.path().join(".gitattributes"), attrs).unwrap();
 
     std::fs::write(tmp.path().join("f.txt"), "original\n").unwrap();
@@ -1014,7 +1010,7 @@ fn test_merge_vendor_multiple_files() {
     // Merge with two vendored files; upstream updates only one.
     let (repo, _tmp, vendor) = setup_merge_scenario(
         "multi",
-        &[("v/one.txt", b"one", ""), ("v/two.txt", b"two", "")],
+        &[("one.txt", b"one"), ("two.txt", b"two")],
         &[
             ("one.txt", b"one"),     // unchanged
             ("two.txt", b"two-new"), // changed
@@ -1036,7 +1032,7 @@ fn test_merge_vendor_filters_unrelated_upstream_files() {
     // They must not appear in the merge result.
     let (repo, _tmp, vendor) = setup_merge_scenario(
         "filter",
-        &[("lib/core.rs", b"fn core(){}", "src")],
+        &[("src/core.rs", b"fn core(){}")],
         &[
             ("src/core.rs", b"fn core(){}"),
             ("src/extra.rs", b"fn extra(){}"), // not tracked locally

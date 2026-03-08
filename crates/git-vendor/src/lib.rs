@@ -127,7 +127,7 @@ pub trait Vendor {
     /// `Some(oid)` means there are unmerged upstream changes at that commit; `None` means up to date.
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error>;
 
-    /// Track vendor pattern(s) by writing per-prefix gitattributes lines with `vendor` and `vendor-prefix` attributes.
+    /// Track vendor pattern(s) by writing gitattributes lines with the `vendor` attribute.
     fn track_vendor_pattern(
         &self,
         vendor: &VendorSource,
@@ -331,7 +331,7 @@ impl Vendor for Repository {
             })?;
             let matcher = compiled.compile_matcher();
 
-            let mut prefixes: HashSet<PathBuf> = HashSet::new();
+            let mut has_match = false;
 
             tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
                 if entry.kind() != Some(git2::ObjectType::Blob) {
@@ -339,19 +339,17 @@ impl Vendor for Repository {
                 }
                 let remote_path = PathBuf::from(dir).join(entry.name().unwrap());
                 if matcher.is_match(&remote_path) {
-                    let prefix = remote_path.parent().unwrap_or(Path::new(""));
-                    prefixes.insert(prefix.to_path_buf());
+                    has_match = true;
                 }
                 git2::TreeWalkResult::Ok
             })?;
 
-            let vendor_attr = format!("vendor={}", vendor.name);
-
-            for prefix in &prefixes {
+            if has_match {
+                let vendor_attr = format!("vendor={}", vendor.name);
                 // Build the local pattern: path + user glob (filename portion).
-                // For a glob like `**/*.c` matching prefix `lib`, the
-                // gitattributes pattern becomes `third_party/*.c` (the local
-                // path joined with the glob's filename component).
+                // For a glob like `**/*.c` the gitattributes pattern becomes
+                // `third_party/*.c` (the local path joined with the glob's
+                // filename component).
                 //
                 // Directory globs (`sub/`) expand to `path/sub/**` so the
                 // gitattributes pattern reflects the actual local directory
@@ -366,14 +364,12 @@ impl Vendor for Repository {
                         .unwrap_or_else(|| glob.to_string());
                     path.join(&glob_filename)
                 };
-                let mut attrs: Vec<&str> = vec![&vendor_attr];
-                let prefix_attr;
-                if !prefix.as_os_str().is_empty() {
-                    prefix_attr = format!("vendor-prefix={}", prefix.display());
-                    attrs.push(&prefix_attr);
-                }
 
-                self.set_attr(&local_pattern.to_string_lossy(), &attrs, &gitattributes)?;
+                self.set_attr(
+                    &local_pattern.to_string_lossy(),
+                    &[&vendor_attr],
+                    &gitattributes,
+                )?;
             }
         }
 
@@ -465,17 +461,7 @@ impl Vendor for Repository {
                 return git2::TreeWalkResult::Ok;
             }
             let local_path = PathBuf::from(dir).join(entry.name().unwrap());
-            let prefix = self
-                .get_attr(
-                    &local_path,
-                    "vendor-prefix",
-                    git2::AttrCheckFlags::FILE_THEN_INDEX,
-                )
-                .ok()
-                .flatten()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::new());
-            expected_remote.insert(prefix.join(local_path.file_name().unwrap()));
+            expected_remote.insert(local_path);
             git2::TreeWalkResult::Ok
         })?;
 
