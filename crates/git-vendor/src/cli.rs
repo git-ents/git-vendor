@@ -67,9 +67,9 @@ pub enum Command {
         #[arg(short, long)]
         branch: Option<String>,
 
-        /// Glob pattern selecting which upstream files to vendor.
+        /// Glob pattern(s) selecting which upstream files to vendor.
         #[arg(short, long, default_value = "**")]
-        pattern: String,
+        pattern: Vec<String>,
 
         /// Local directory where vendored files are placed (defaults to current directory).
         #[arg(long)]

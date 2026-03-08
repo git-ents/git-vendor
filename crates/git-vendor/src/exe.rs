@@ -34,14 +34,14 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 /// * `name`    – unique identifier stored in `.gitvendors`
 /// * `url`     – remote URL to vendor from
 /// * `branch`  – upstream branch to track (`None` → HEAD)
-/// * `pattern` – glob selecting which upstream files to vendor (e.g. `"**"`)
-/// * `path`    – local directory for vendored files; defaults to `"."`
+/// * `patterns` – glob(s) selecting which upstream files to vendor (e.g. `["**"]`)
+/// * `path`     – local directory for vendored files; defaults to `"."`
 pub fn add(
     repo: &Repository,
     name: &str,
     url: &str,
     branch: Option<&str>,
-    pattern: &str,
+    patterns: &[&str],
     path: Option<&Path>,
     file_favor: Option<git2::FileFavor>,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
@@ -71,9 +71,9 @@ pub fn add(
     // Fetch upstream.
     repo.fetch_vendor(&source, None)?;
 
-    // Track the requested pattern.
+    // Track the requested pattern(s).
     let path = path.unwrap_or_else(|| Path::new("."));
-    repo.track_vendor_pattern(&source, pattern, path)?;
+    repo.track_vendor_pattern(&source, patterns, path)?;
 
     // Update base in .gitvendors to the current upstream tip.
     let vendor_ref = repo.find_reference(&source.head_ref())?;
@@ -89,9 +89,9 @@ pub fn add(
         updated.to_config(&mut cfg)?;
     }
 
-    // Perform the initial one-time merge using the glob pattern directly,
+    // Perform the initial one-time merge using the glob pattern(s) directly,
     // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
-    let merged_index = repo.add_vendor(&source, pattern, path, file_favor)?;
+    let merged_index = repo.add_vendor(&source, patterns, path, file_favor)?;
 
     // Write merged result (including conflict markers) to the working tree
     // and stage clean entries.

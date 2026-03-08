@@ -538,7 +538,7 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
 
     // set_attr resolves `.gitattributes` relative to CWD, so chdir into the repo.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, "*.txt", Path::new("lib"))
+        repo.track_vendor_pattern(&vendor, &["*.txt"], Path::new("lib"))
             .unwrap();
     });
 
@@ -572,7 +572,7 @@ fn test_track_vendor_pattern_selective_glob() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, "*.rs", Path::new("src"))
+        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
             .unwrap();
     });
 
@@ -604,7 +604,7 @@ fn test_track_vendor_pattern_nested_directory() {
 
     // Use `sub/` glob which should expand to `sub/**`
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, "sub/", Path::new("vendor"))
+        repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"))
             .unwrap();
     });
 
@@ -634,7 +634,7 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, "**/*.c", Path::new("third_party"))
+        repo.track_vendor_pattern(&vendor, &["**/*.c"], Path::new("third_party"))
             .unwrap();
     });
 
@@ -646,6 +646,47 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
     assert!(
         content.contains("vendor-prefix=lib"),
         "expected vendor-prefix=lib in:\n{content}"
+    );
+}
+
+#[test]
+fn test_track_vendor_pattern_multiple_globs() {
+    // Upstream tree has .rs, .toml, and .txt files – only .rs and .toml should be tracked.
+    let (repo, tmp) = init_repo_with_gitattributes("");
+    let upstream_tree = build_tree(
+        &repo,
+        &[
+            ("main.rs", b"fn main(){}"),
+            ("Cargo.toml", b"[package]"),
+            ("README.txt", b"hello"),
+        ],
+    );
+    commit_tree_to_ref(&repo, "refs/vendor/multi", &upstream_tree, "vendor tip");
+
+    let vendor = VendorSource {
+        name: "multi".into(),
+        url: "https://example.com/multi.git".into(),
+        branch: None,
+        base: None,
+    };
+
+    with_cwd(tmp.path(), || {
+        repo.track_vendor_pattern(&vendor, &["*.rs", "*.toml"], Path::new("lib"))
+            .unwrap();
+    });
+
+    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
+    assert!(
+        content.contains("lib/main.rs") && content.contains("vendor=multi"),
+        "expected lib/main.rs vendor=multi in:\n{content}"
+    );
+    assert!(
+        content.contains("lib/Cargo.toml") && content.contains("vendor=multi"),
+        "expected lib/Cargo.toml vendor=multi in:\n{content}"
+    );
+    assert!(
+        !content.contains("README.txt"),
+        "README.txt should not be tracked:\n{content}"
     );
 }
 
@@ -663,7 +704,7 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, "*.rs", Path::new("src"))
+        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
             .unwrap();
     });
 

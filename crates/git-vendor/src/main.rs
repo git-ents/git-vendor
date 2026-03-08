@@ -55,12 +55,13 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 other => Some(other.to_file_favor()),
             };
             let name = name.as_deref().unwrap_or_else(|| cli::name_from_url(url));
+            let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
             let outcome = exe::add(
                 &repo,
                 name,
                 url,
                 branch.as_deref(),
-                pattern,
+                &patterns,
                 path.as_deref(),
                 file_favor,
             )?;

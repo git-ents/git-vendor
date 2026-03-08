@@ -120,11 +120,11 @@ pub trait Vendor {
     /// `Some(oid)` means there are unmerged upstream changes at that commit; `None` means up to date.
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error>;
 
-    /// Track a vendor pattern by setting `vendor` and `vendor-prefix` attributes on matching files.
+    /// Track vendor pattern(s) by setting `vendor` and `vendor-prefix` attributes on matching files.
     fn track_vendor_pattern(
         &self,
         vendor: &VendorSource,
-        glob: &str,
+        globs: &[&str],
         path: &Path,
     ) -> Result<(), git2::Error>;
 
@@ -148,7 +148,7 @@ pub trait Vendor {
     fn add_vendor(
         &self,
         vendor: &VendorSource,
-        glob: &str,
+        globs: &[&str],
         path: &Path,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error>;
@@ -279,7 +279,7 @@ impl Vendor for Repository {
     fn track_vendor_pattern(
         &self,
         vendor: &VendorSource,
-        glob: &str,
+        globs: &[&str],
         path: &Path,
     ) -> Result<(), git2::Error> {
         let workdir = self
@@ -287,20 +287,21 @@ impl Vendor for Repository {
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
         let gitattributes = workdir.join(path).join(".gitattributes");
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
-        // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
-        // globset matches all files under that directory recursively.
-        let normalized: String;
-        let pat = if glob.ends_with('/') {
-            normalized = format!("{}**", glob);
-            normalized.as_str()
-        } else {
-            glob
-        };
 
         let mut glob_builder = globset::GlobSetBuilder::new();
-        let g = globset::Glob::new(pat)
-            .map_err(|e| git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e)))?;
-        glob_builder.add(g);
+        for glob in globs {
+            // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
+            // globset matches all files under that directory recursively.
+            let pat = if glob.ends_with('/') {
+                format!("{}**", glob)
+            } else {
+                glob.to_string()
+            };
+            let g = globset::Glob::new(&pat).map_err(|e| {
+                git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e))
+            })?;
+            glob_builder.add(g);
+        }
         let matcher = glob_builder
             .build()
             .map_err(|e| git2::Error::from_str(&e.to_string()))?;
@@ -334,24 +335,24 @@ impl Vendor for Repository {
     fn add_vendor(
         &self,
         vendor: &VendorSource,
-        glob: &str,
+        globs: &[&str],
         _path: &Path,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
-        // globset matches all files under that directory recursively.
-        let normalized: String;
-        let pat = if glob.ends_with('/') {
-            normalized = format!("{}**", glob);
-            normalized.as_str()
-        } else {
-            glob
-        };
-
         let mut glob_builder = globset::GlobSetBuilder::new();
-        let g = globset::Glob::new(pat)
-            .map_err(|e| git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e)))?;
-        glob_builder.add(g);
+        for glob in globs {
+            // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
+            // globset matches all files under that directory recursively.
+            let pat = if glob.ends_with('/') {
+                format!("{}**", glob)
+            } else {
+                glob.to_string()
+            };
+            let g = globset::Glob::new(&pat).map_err(|e| {
+                git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e))
+            })?;
+            glob_builder.add(g);
+        }
         let matcher = glob_builder
             .build()
             .map_err(|e| git2::Error::from_str(&e.to_string()))?;
