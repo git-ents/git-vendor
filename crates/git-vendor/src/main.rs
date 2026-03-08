@@ -22,6 +22,59 @@ fn main() {
     }
 }
 
+/// Determine which vendors to merge based on `name`, `--all`, and how many
+/// vendors are configured.  Returns the list of vendor names to operate on.
+fn resolve_merge_targets(
+    repo: &git2::Repository,
+    name: &Option<String>,
+    all: bool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    match name {
+        Some(n) => Ok(vec![n.clone()]),
+        None => {
+            let vendors = repo.list_vendors()?;
+            if vendors.is_empty() {
+                return Ok(vec![]);
+            }
+            if all || vendors.len() == 1 {
+                Ok(vendors.into_iter().map(|v| v.name).collect())
+            } else {
+                Err(format!(
+                    "multiple vendors configured; specify a name or pass --all\n\
+                     \n  configured vendors: {}",
+                    vendors
+                        .iter()
+                        .map(|v| v.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+                .into())
+            }
+        }
+    }
+}
+
+/// Print merge outcomes to stderr.
+fn print_merge_outcomes(outcomes: &[(String, exe::MergeOutcome)]) {
+    for (vname, outcome) in outcomes {
+        match outcome {
+            exe::MergeOutcome::Clean { vendor } => {
+                eprintln!(
+                    "'{}' merged cleanly (base {}).",
+                    vname,
+                    vendor.base.as_deref().unwrap_or("(none)"),
+                );
+            }
+            exe::MergeOutcome::Conflict { .. } => {
+                eprintln!(
+                    "Conflicts detected for '{}'. Resolve them and commit.",
+                    vname,
+                );
+            }
+        }
+    }
+}
+
 fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let repo = exe::open_repo(cli.repo.as_deref())?;
 
@@ -158,45 +211,31 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
         Command::Merge {
             name,
+            all,
             strategy_option,
         } => {
             let file_favor = match strategy_option {
                 cli::StrategyOption::Normal => None,
                 other => Some(other.to_file_favor()),
             };
-            let outcomes = match name {
-                Some(n) => {
-                    let outcome = exe::merge_one(&repo, n, file_favor)?;
-                    vec![(n.clone(), outcome)]
-                }
-                None => exe::merge_all(&repo, file_favor)?,
-            };
-
-            if outcomes.is_empty() {
+            let targets = resolve_merge_targets(&repo, name, *all)?;
+            if targets.is_empty() {
                 println!("No vendors configured.");
-            } else {
-                for (vname, outcome) in &outcomes {
-                    match outcome {
-                        exe::MergeOutcome::Clean { vendor } => {
-                            eprintln!(
-                                "'{}' merged cleanly (base {}).",
-                                vname,
-                                vendor.base.as_deref().unwrap_or("(none)"),
-                            );
-                        }
-                        exe::MergeOutcome::Conflict { .. } => {
-                            eprintln!(
-                                "Conflicts detected for '{}'. Resolve them and commit.",
-                                vname
-                            );
-                        }
-                    }
-                }
+                return Ok(());
             }
+
+            let mut outcomes = Vec::with_capacity(targets.len());
+            for t in &targets {
+                let outcome = exe::merge_one(&repo, t, file_favor)?;
+                outcomes.push((t.clone(), outcome));
+            }
+
+            print_merge_outcomes(&outcomes);
         }
 
         Command::Pull {
             name,
+            all,
             strategy_option,
         } => {
             let file_favor = match strategy_option {
@@ -204,50 +243,27 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 other => Some(other.to_file_favor()),
             };
 
-            // Fetch
-            match name {
-                Some(n) => {
-                    if let Some(oid) = exe::fetch_one(&repo, n)? {
-                        eprintln!("Fetched '{}' -> {}", n, oid);
-                    }
-                }
-                None => {
-                    if repo.list_vendors()?.is_empty() {
-                        println!("No vendors configured.");
-                        return Ok(());
-                    }
-                    for (vname, oid) in &exe::fetch_all(&repo)? {
-                        eprintln!("Fetched '{}' -> {}", vname, oid);
-                    }
+            // Resolve targets first (requires name, --all, or single vendor).
+            let targets = resolve_merge_targets(&repo, name, *all)?;
+            if targets.is_empty() {
+                println!("No vendors configured.");
+                return Ok(());
+            }
+
+            // Fetch only the resolved targets.
+            for t in &targets {
+                if let Some(oid) = exe::fetch_one(&repo, t)? {
+                    eprintln!("Fetched '{}' -> {}", t, oid);
                 }
             }
 
-            // Merge
-            let outcomes = match name {
-                Some(n) => {
-                    let outcome = exe::merge_one(&repo, n, file_favor)?;
-                    vec![(n.clone(), outcome)]
-                }
-                None => exe::merge_all(&repo, file_favor)?,
-            };
-
-            for (vname, outcome) in &outcomes {
-                match outcome {
-                    exe::MergeOutcome::Clean { vendor } => {
-                        eprintln!(
-                            "'{}' merged cleanly (base {}).",
-                            vname,
-                            vendor.base.as_deref().unwrap_or("(none)"),
-                        );
-                    }
-                    exe::MergeOutcome::Conflict { .. } => {
-                        eprintln!(
-                            "Conflicts detected for '{}'. Resolve them and commit.",
-                            vname
-                        );
-                    }
-                }
+            let mut outcomes = Vec::with_capacity(targets.len());
+            for t in &targets {
+                let outcome = exe::merge_one(&repo, t, file_favor)?;
+                outcomes.push((t.clone(), outcome));
             }
+
+            print_merge_outcomes(&outcomes);
         }
     }
 

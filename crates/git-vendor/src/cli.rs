@@ -118,20 +118,30 @@ pub enum Command {
     /// Clean up refs/vendor/* refs that have no corresponding entry in .gitvendors.
     Prune,
 
-    /// Merge upstream changes for one or all vendors.
+    /// Merge upstream changes for a vendor.
     Merge {
-        /// Vendor name. If omitted, merges all vendors.
+        /// Vendor name. Required unless `--all` is given or only one vendor
+        /// is configured.
         name: Option<String>,
+
+        /// Merge all configured vendors.
+        #[arg(short, long)]
+        all: bool,
 
         /// Strategy option for resolving conflicting regions during the merge.
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
         strategy_option: StrategyOption,
     },
 
-    /// Fetch and merge upstream changes for one or all vendors.
+    /// Fetch and merge upstream changes for a vendor.
     Pull {
-        /// Vendor name. If omitted, pulls all vendors.
+        /// Vendor name. Required unless `--all` is given or only one vendor
+        /// is configured.
         name: Option<String>,
+
+        /// Pull all configured vendors.
+        #[arg(short, long)]
+        all: bool,
 
         /// Strategy option for resolving conflicting regions during the merge.
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
