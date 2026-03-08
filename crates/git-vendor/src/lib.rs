@@ -18,7 +18,8 @@ use git2::Repository;
 /// Git patterns (e.g. in `.gitattributes`) always use `/` as the separator,
 /// but `Path::join` and `PathBuf::from` produce `\` on Windows.
 fn to_git_path(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/")
+    let s = p.to_string_lossy().replace('\\', "/");
+    s.strip_prefix("./").unwrap_or(&s).to_string()
 }
 
 /// Build a [`globset::GlobSet`] from a slice of pattern strings, normalizing
@@ -399,7 +400,7 @@ impl Vendor for Repository {
             let vendor_attr = format!("vendor={}", vendor.name);
 
             for file in &matched_files {
-                let local_pattern = format!("{}/{}", to_git_path(path), file);
+                let local_pattern = to_git_path(&path.join(file));
                 self.set_attr(&local_pattern, &[&vendor_attr], &gitattributes)?;
             }
         }
@@ -469,13 +470,14 @@ impl Vendor for Repository {
             self.filter_by_predicate(&theirs, |_repo, path| matcher.is_match(path))?;
 
         // LOCAL (ours): use gitattributes to find files currently tracked for
-        // this vendor.  This respects any manual edits to .gitattributes.
+        // this vendor.  Falls back to vendor patterns when the gitattribute
+        // is unset (e.g. legacy .gitattributes with `./` prefixed patterns).
         let expected_vendor = vendor.name.clone();
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered = self.filter_by_predicate(&ours, |repo, path| {
             match repo.get_attr(path, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
-                Ok(Some(value)) => value == expected_vendor,
-                _ => false,
+                Ok(Some(value)) if value == expected_vendor => true,
+                _ => matcher.is_match(path),
             }
         })?;
 
@@ -486,8 +488,13 @@ impl Vendor for Repository {
             opts.file_favor(favor);
         }
 
-        let base = match self.find_vendor_base(&vendor)? {
-            Some(c) => c.as_object().peel_to_tree()?,
+        let base_commit = self.find_vendor_base(&vendor)?;
+        let base_full_tree;
+        let base = match &base_commit {
+            Some(c) => {
+                base_full_tree = c.as_object().peel_to_tree()?;
+                self.filter_by_predicate(&base_full_tree, |_repo, path| matcher.is_match(path))?
+            }
             None => self.find_tree(ours_filtered.id())?,
         };
 

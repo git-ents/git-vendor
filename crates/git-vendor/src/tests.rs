@@ -790,12 +790,12 @@ fn test_track_vendor_pattern_expands_to_per_file() {
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     // Per-file entries, not a glob pattern.
     assert!(
-        content.contains("./a.txt vendor=expand"),
-        "expected ./a.txt entry in:\n{content}"
+        content.contains("a.txt vendor=expand"),
+        "expected a.txt entry in:\n{content}"
     );
     assert!(
-        content.contains("./sub/b.txt vendor=expand"),
-        "expected ./sub/b.txt entry in:\n{content}"
+        content.contains("sub/b.txt vendor=expand"),
+        "expected sub/b.txt entry in:\n{content}"
     );
     // No glob pattern.
     assert!(
