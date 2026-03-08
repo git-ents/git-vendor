@@ -2,6 +2,35 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+/// Merge strategy option for resolving conflicting regions during vendor
+/// merges.  These mirror the `-X` / `--strategy-option` values accepted by
+/// `git merge`.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum StrategyOption {
+    /// Record conflicts in the index so that checkout produces conflict
+    /// markers in the working directory (the default).
+    #[default]
+    Normal,
+    /// Resolve conflicts by taking "ours" (the local side).
+    Ours,
+    /// Resolve conflicts by taking "theirs" (the upstream/vendor side).
+    Theirs,
+    /// Combine both sides, keeping each unique line (union merge).
+    Union,
+}
+
+impl StrategyOption {
+    /// Convert to the corresponding `git2::FileFavor`.
+    pub fn to_file_favor(self) -> git2::FileFavor {
+        match self {
+            StrategyOption::Normal => git2::FileFavor::Normal,
+            StrategyOption::Ours => git2::FileFavor::Ours,
+            StrategyOption::Theirs => git2::FileFavor::Theirs,
+            StrategyOption::Union => git2::FileFavor::Union,
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "git vendor", bin_name = "git vendor")]
 #[command(
@@ -45,6 +74,10 @@ pub enum Command {
         /// Local directory where vendored files are placed (defaults to current directory).
         #[arg(long)]
         path: Option<PathBuf>,
+
+        /// Strategy option for resolving conflicting regions during the merge.
+        #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
+        strategy_option: StrategyOption,
     },
 
     /// Fetch the latest upstream commits for one or all vendors.
@@ -60,6 +93,10 @@ pub enum Command {
     Merge {
         /// Vendor name. If omitted, merges all vendors.
         name: Option<String>,
+
+        /// Strategy option for resolving conflicting regions during the merge.
+        #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
+        strategy_option: StrategyOption,
     },
 }
 

@@ -560,7 +560,7 @@ fn test_merge_vendor_two_way_no_conflicts() {
     );
 
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
-    let index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let index = tr.repo.merge_vendor(&vs, None, None).unwrap();
 
     // Two-way with no base: merge_trees(&theirs, &ours, &theirs) should
     // produce a valid index without hard conflicts on disjoint content.
@@ -588,7 +588,7 @@ fn test_merge_vendor_two_way_empty_vendored_set() {
 
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
     // Should complete without error even when the vendored set is empty.
-    let index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let index = tr.repo.merge_vendor(&vs, None, None).unwrap();
     assert!(!index.has_conflicts());
 }
 
@@ -746,7 +746,7 @@ fn test_end_to_end_fetch_then_merge_two_way_clean() {
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
     tr.repo.fetch_vendor(&vs, None).unwrap();
 
-    let index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let index = tr.repo.merge_vendor(&vs, None, None).unwrap();
     assert!(!index.has_conflicts());
 }
 
@@ -784,7 +784,7 @@ fn test_end_to_end_fetch_then_merge_three_way_clean() {
     tr.repo.fetch_vendor(&vs, None).unwrap();
 
     // Three-way merge: base → ours (unchanged) + base → theirs (added line).
-    let index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let index = tr.repo.merge_vendor(&vs, None, None).unwrap();
     assert!(!index.has_conflicts());
 }
 
@@ -818,7 +818,7 @@ fn test_end_to_end_fetch_then_merge_three_way_conflict_then_resolve() {
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
     tr.repo.fetch_vendor(&vs, None).unwrap();
 
-    let mut index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let mut index = tr.repo.merge_vendor(&vs, None, None).unwrap();
 
     // The three-way merge must report a conflict on shared.txt.
     assert!(index.has_conflicts());
@@ -912,7 +912,7 @@ fn test_end_to_end_fetch_then_merge_multiple_files_partial_conflict() {
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
     tr.repo.fetch_vendor(&vs, None).unwrap();
 
-    let mut index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let mut index = tr.repo.merge_vendor(&vs, None, None).unwrap();
 
     // api.txt must conflict; readme.txt must not.
     assert!(index.has_conflicts());
@@ -998,6 +998,6 @@ fn test_merge_vendor_three_way_clean_merge() {
     ));
 
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
-    let index = tr.repo.merge_vendor(&vs, None).unwrap();
+    let index = tr.repo.merge_vendor(&vs, None, None).unwrap();
     assert!(!index.has_conflicts());
 }

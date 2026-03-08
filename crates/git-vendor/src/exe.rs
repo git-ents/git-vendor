@@ -43,6 +43,7 @@ pub fn add(
     branch: Option<&str>,
     pattern: &str,
     path: Option<&Path>,
+    file_favor: Option<git2::FileFavor>,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     if repo.get_vendor_by_name(name)?.is_some() {
         return Err(format!("vendor '{}' already exists", name).into());
@@ -90,7 +91,7 @@ pub fn add(
 
     // Perform the initial one-time merge using the glob pattern directly,
     // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
-    let merged_index = repo.add_vendor(&source, pattern, path)?;
+    let merged_index = repo.add_vendor(&source, pattern, path, file_favor)?;
 
     // Write merged result (including conflict markers) to the working tree
     // and stage clean entries.
@@ -196,11 +197,12 @@ pub enum MergeOutcome {
 pub fn merge_one(
     repo: &Repository,
     name: &str,
+    file_favor: Option<git2::FileFavor>,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     let vendor = repo
         .get_vendor_by_name(name)?
         .ok_or_else(|| format!("vendor '{}' not found", name))?;
-    merge_vendor(repo, &vendor)
+    merge_vendor(repo, &vendor, file_favor)
 }
 
 /// Merge upstream changes for every configured vendor.
@@ -209,11 +211,12 @@ pub fn merge_one(
 /// were processed.  Processing stops at the first error.
 pub fn merge_all(
     repo: &Repository,
+    file_favor: Option<git2::FileFavor>,
 ) -> Result<Vec<(String, MergeOutcome)>, Box<dyn std::error::Error>> {
     let vendors = repo.list_vendors()?;
     let mut results = Vec::with_capacity(vendors.len());
     for v in &vendors {
-        let outcome = merge_vendor(repo, v)?;
+        let outcome = merge_vendor(repo, v, file_favor)?;
         results.push((v.name.clone(), outcome));
     }
     Ok(results)
@@ -290,6 +293,7 @@ fn checkout_and_stage(
 fn merge_vendor(
     repo: &Repository,
     vendor: &VendorSource,
+    file_favor: Option<git2::FileFavor>,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
@@ -306,7 +310,7 @@ fn merge_vendor(
         updated.to_config(&mut cfg)?;
     }
 
-    let merged_index = repo.merge_vendor(vendor, None)?;
+    let merged_index = repo.merge_vendor(vendor, None, file_favor)?;
 
     checkout_and_stage(repo, merged_index, updated)
 }

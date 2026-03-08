@@ -150,6 +150,7 @@ pub trait Vendor {
         vendor: &VendorSource,
         glob: &str,
         path: &Path,
+        file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error>;
 
     /// If a `base` exists in the vendor source provided (by `name`),
@@ -162,6 +163,7 @@ pub trait Vendor {
         &self,
         vendor: &VendorSource,
         maybe_opts: Option<&mut git2::FetchOptions>,
+        file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error>;
 
     /// Given a vendor's name and a target commit (defaulting to `HEAD`),
@@ -334,6 +336,7 @@ impl Vendor for Repository {
         vendor: &VendorSource,
         glob: &str,
         _path: &Path,
+        file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
         // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
         // globset matches all files under that directory recursively.
@@ -385,6 +388,9 @@ impl Vendor for Repository {
         let mut opts = git2::MergeOptions::new();
         opts.find_renames(true);
         opts.rename_threshold(50);
+        if let Some(favor) = file_favor {
+            opts.file_favor(favor);
+        }
 
         self.merge_trees(&empty_tree, &ours_filtered, &theirs_filtered, Some(&opts))
     }
@@ -393,6 +399,7 @@ impl Vendor for Repository {
         &self,
         vendor: &VendorSource,
         _maybe_opts: Option<&mut git2::FetchOptions>,
+        file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
         let expected_vendor = vendor.name.clone();
         let ours = self.head()?.peel_to_tree()?;
@@ -431,6 +438,9 @@ impl Vendor for Repository {
         let mut opts = git2::MergeOptions::new();
         opts.find_renames(true);
         opts.rename_threshold(50);
+        if let Some(favor) = file_favor {
+            opts.file_favor(favor);
+        }
 
         let base = match self.find_vendor_base(&vendor)? {
             Some(c) => c.as_object().peel_to_tree()?,

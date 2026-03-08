@@ -7,9 +7,14 @@
 - Prioritize clarity in communication and contributions.
 - Prioritize correctness and challenge assumptions when appropriate.
 - Prioritize pausing early to confirm the output matches expectations.
-- When in doubt, ask questions.
-- When appropriate, ask yourself what could be improved about your contribution.
 - Never write unsolicited summary documents.
+
+> [!IMPORTANT]
+>
+> - When you're done with a request, ask yourself what could be improved, and report anything important.
+> - When you're done with a request, ask yourself if you learned anything new; add content to `.rules` as appropriate.
+> - When in doubt, ask questions.
+
 
 ## Git
 

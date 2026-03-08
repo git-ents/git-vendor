@@ -47,7 +47,12 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             branch,
             pattern,
             path,
+            strategy_option,
         } => {
+            let file_favor = match strategy_option {
+                cli::StrategyOption::Normal => None,
+                other => Some(other.to_file_favor()),
+            };
             let name = name.as_deref().unwrap_or_else(|| cli::name_from_url(url));
             let outcome = exe::add(
                 &repo,
@@ -56,6 +61,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 branch.as_deref(),
                 pattern,
                 path.as_deref(),
+                file_favor,
             )?;
             match outcome {
                 exe::MergeOutcome::Clean { vendor } => {
@@ -113,13 +119,20 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        Command::Merge { name } => {
+        Command::Merge {
+            name,
+            strategy_option,
+        } => {
+            let file_favor = match strategy_option {
+                cli::StrategyOption::Normal => None,
+                other => Some(other.to_file_favor()),
+            };
             let outcomes = match name {
                 Some(n) => {
-                    let outcome = exe::merge_one(&repo, n)?;
+                    let outcome = exe::merge_one(&repo, n, file_favor)?;
                     vec![(n.clone(), outcome)]
                 }
-                None => exe::merge_all(&repo)?,
+                None => exe::merge_all(&repo, file_favor)?,
             };
 
             if outcomes.is_empty() {

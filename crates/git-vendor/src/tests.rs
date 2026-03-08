@@ -792,7 +792,7 @@ fn test_merge_vendor_no_base_identical_content() {
         &[("src/hello.c", b"int main(){}")],
     );
 
-    let index = repo.merge_vendor(&vendor, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None, None).unwrap();
     assert!(
         !index.has_conflicts(),
         "identical content should produce a clean merge"
@@ -810,7 +810,7 @@ fn test_merge_vendor_no_base_upstream_changed() {
         &[("include/util.h", b"// v2")],
     );
 
-    let index = repo.merge_vendor(&vendor, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None, None).unwrap();
     // The merge should succeed without conflicts because the base equals ours.
     assert!(
         !index.has_conflicts(),
@@ -882,7 +882,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         base: Some(base_tree_commit.to_string()),
     };
 
-    let idx = repo.merge_vendor(&vendor, None).unwrap();
+    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
     assert!(
         !idx.has_conflicts(),
         "non-overlapping changes should merge cleanly with a base"
@@ -949,7 +949,7 @@ fn test_merge_vendor_conflict() {
         base: Some(base_tree_commit.to_string()),
     };
 
-    let idx = repo.merge_vendor(&vendor, None).unwrap();
+    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
     assert!(
         idx.has_conflicts(),
         "both sides modifying the same region should produce a conflict"
@@ -968,7 +968,7 @@ fn test_merge_vendor_multiple_files() {
         ],
     );
 
-    let index = repo.merge_vendor(&vendor, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None, None).unwrap();
     // Without a base the filtered-ours is used as base, so this should be
     // a clean merge that picks up the upstream change.
     assert!(
@@ -991,7 +991,7 @@ fn test_merge_vendor_filters_unrelated_upstream_files() {
         ],
     );
 
-    let index = repo.merge_vendor(&vendor, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None, None).unwrap();
     assert!(
         !index.has_conflicts(),
         "extra upstream files should be filtered out, leaving a clean merge"
