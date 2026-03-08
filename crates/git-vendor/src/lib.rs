@@ -120,7 +120,7 @@ pub trait Vendor {
     /// `Some(oid)` means there are unmerged upstream changes at that commit; `None` means up to date.
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error>;
 
-    /// Track vendor pattern(s) by setting `vendor` and `vendor-prefix` attributes on matching files.
+    /// Track vendor pattern(s) by writing per-prefix gitattributes lines with `vendor` and `vendor-prefix` attributes.
     fn track_vendor_pattern(
         &self,
         vendor: &VendorSource,
@@ -288,46 +288,55 @@ impl Vendor for Repository {
         let gitattributes = workdir.join(path).join(".gitattributes");
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
 
-        let mut glob_builder = globset::GlobSetBuilder::new();
+        // For each user-provided glob, collect the unique upstream prefixes
+        // (directory components) where matching files reside, then write one
+        // gitattributes line per (glob, prefix) pair instead of one per file.
         for glob in globs {
-            // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
-            // globset matches all files under that directory recursively.
-            let pat = if glob.ends_with('/') {
+            let normalized = if glob.ends_with('/') {
                 format!("{}**", glob)
             } else {
                 glob.to_string()
             };
-            let g = globset::Glob::new(&pat).map_err(|e| {
+            let compiled = globset::Glob::new(&normalized).map_err(|e| {
                 git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e))
             })?;
-            glob_builder.add(g);
-        }
-        let matcher = glob_builder
-            .build()
-            .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+            let matcher = compiled.compile_matcher();
 
-        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-            if entry.kind() != Some(git2::ObjectType::Blob) {
-                return git2::TreeWalkResult::Ok;
-            }
-            let remote_path = PathBuf::from(dir).join(entry.name().unwrap());
-            if !matcher.is_match(&remote_path) {
-                return git2::TreeWalkResult::Ok;
-            }
-            let prefix = remote_path.parent().unwrap_or(Path::new(""));
-            let local_path = path.join(entry.name().unwrap());
+            let mut prefixes: HashSet<PathBuf> = HashSet::new();
+
+            tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+                if entry.kind() != Some(git2::ObjectType::Blob) {
+                    return git2::TreeWalkResult::Ok;
+                }
+                let remote_path = PathBuf::from(dir).join(entry.name().unwrap());
+                if matcher.is_match(&remote_path) {
+                    let prefix = remote_path.parent().unwrap_or(Path::new(""));
+                    prefixes.insert(prefix.to_path_buf());
+                }
+                git2::TreeWalkResult::Ok
+            })?;
+
             let vendor_attr = format!("vendor={}", vendor.name);
-            let prefix_attr = format!("vendor-prefix={}", prefix.display());
 
-            match self.set_attr(
-                &local_path.to_string_lossy(),
-                &[&vendor_attr, &prefix_attr],
-                &gitattributes,
-            ) {
-                Ok(_) => return git2::TreeWalkResult::Ok,
-                Err(_) => return git2::TreeWalkResult::Abort,
-            };
-        })?;
+            for prefix in &prefixes {
+                // Build the local pattern: path + user glob (filename portion).
+                // For a glob like `**/*.c` matching prefix `lib`, the
+                // gitattributes pattern becomes `third_party/*.c` (the local
+                // path joined with the glob's filename component).
+                let glob_filename = Path::new(glob)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| glob.to_string());
+                let local_pattern = path.join(&glob_filename);
+                let prefix_attr = format!("vendor-prefix={}", prefix.display());
+
+                self.set_attr(
+                    &local_pattern.to_string_lossy(),
+                    &[&vendor_attr, &prefix_attr],
+                    &gitattributes,
+                )?;
+            }
+        }
 
         Ok(())
     }

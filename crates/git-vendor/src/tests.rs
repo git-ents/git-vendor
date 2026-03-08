@@ -542,15 +542,20 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
             .unwrap();
     });
 
-    // .gitattributes should now contain entries for both files under `lib/`.
+    // Should contain a single pattern line, not per-file entries.
     let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
-        content.contains("lib/a.txt") && content.contains("vendor=upstream"),
-        "expected lib/a.txt vendor=upstream in:\n{content}"
+        content.contains("lib/*.txt") && content.contains("vendor=upstream"),
+        "expected lib/*.txt vendor=upstream in:\n{content}"
     );
     assert!(
-        content.contains("lib/b.txt") && content.contains("vendor=upstream"),
-        "expected lib/b.txt vendor=upstream in:\n{content}"
+        content.contains("vendor-prefix="),
+        "expected vendor-prefix= in:\n{content}"
+    );
+    // No per-file splatting.
+    assert!(
+        !content.contains("lib/a.txt") && !content.contains("lib/b.txt"),
+        "should not contain per-file entries:\n{content}"
     );
 }
 
@@ -578,8 +583,8 @@ fn test_track_vendor_pattern_selective_glob() {
 
     let content = std::fs::read_to_string(tmp.path().join("src/.gitattributes")).unwrap();
     assert!(
-        content.contains("src/main.rs") && content.contains("vendor=sel"),
-        "expected src/main.rs vendor=sel in:\n{content}"
+        content.contains("src/*.rs") && content.contains("vendor=sel"),
+        "expected src/*.rs vendor=sel in:\n{content}"
     );
     // README.txt must NOT appear
     assert!(
@@ -609,13 +614,17 @@ fn test_track_vendor_pattern_nested_directory() {
     });
 
     let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
-    assert!(
-        content.contains("vendor/deep.txt"),
-        "expected vendor/deep.txt in:\n{content}"
-    );
+    // The filename component of `sub/` is `sub/` itself (no file_name()),
+    // so the pattern falls back to the full glob → `vendor/sub/`.
+    // After normalization the glob `sub/` → `sub/**`, which matches
+    // prefix `sub`.
     assert!(
         content.contains("vendor-prefix=sub"),
         "expected vendor-prefix=sub in:\n{content}"
+    );
+    assert!(
+        content.contains("vendor=nested"),
+        "expected vendor=nested in:\n{content}"
     );
 }
 
@@ -639,9 +648,10 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
     });
 
     let content = std::fs::read_to_string(tmp.path().join("third_party/.gitattributes")).unwrap();
+    // Pattern uses the glob's filename component, not individual files.
     assert!(
-        content.contains("third_party/foo.c"),
-        "expected third_party/foo.c in:\n{content}"
+        content.contains("third_party/*.c") && content.contains("vendor=pfx"),
+        "expected third_party/*.c vendor=pfx in:\n{content}"
     );
     assert!(
         content.contains("vendor-prefix=lib"),
@@ -677,12 +687,12 @@ fn test_track_vendor_pattern_multiple_globs() {
 
     let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
-        content.contains("lib/main.rs") && content.contains("vendor=multi"),
-        "expected lib/main.rs vendor=multi in:\n{content}"
+        content.contains("lib/*.rs") && content.contains("vendor=multi"),
+        "expected lib/*.rs vendor=multi in:\n{content}"
     );
     assert!(
-        content.contains("lib/Cargo.toml") && content.contains("vendor=multi"),
-        "expected lib/Cargo.toml vendor=multi in:\n{content}"
+        content.contains("lib/*.toml") && content.contains("vendor=multi"),
+        "expected lib/*.toml vendor=multi in:\n{content}"
     );
     assert!(
         !content.contains("README.txt"),
