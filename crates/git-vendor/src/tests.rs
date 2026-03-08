@@ -853,6 +853,8 @@ fn setup_merge_scenario(
     local_files: &[(&str, &[u8])],
     // (remote_path, content) – full paths in the upstream tree.
     remote_files: &[(&str, &[u8])],
+    // Glob patterns for the vendor.
+    patterns: &[&str],
 ) -> (git2::Repository, tempfile::TempDir, VendorSource) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = git2::Repository::init(tmp.path()).unwrap();
@@ -910,7 +912,7 @@ fn setup_merge_scenario(
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        patterns: patterns.iter().map(|s| s.to_string()).collect(),
     };
 
     (repo, tmp, vendor)
@@ -923,6 +925,7 @@ fn test_merge_vendor_no_base_identical_content() {
         "lib",
         &[("src/hello.c", b"int main(){}")],
         &[("src/hello.c", b"int main(){}")],
+        &["**"],
     );
 
     let index = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -941,6 +944,7 @@ fn test_merge_vendor_no_base_upstream_changed() {
         "ext",
         &[("include/util.h", b"// v1")],
         &[("include/util.h", b"// v2")],
+        &["**"],
     );
 
     let index = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1012,7 +1016,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
-        patterns: vec![],
+        patterns: vec!["**".into()],
     };
 
     let idx = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1079,7 +1083,7 @@ fn test_merge_vendor_conflict() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
-        patterns: vec![],
+        patterns: vec!["**".into()],
     };
 
     let idx = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1099,6 +1103,7 @@ fn test_merge_vendor_multiple_files() {
             ("one.txt", b"one"),     // unchanged
             ("two.txt", b"two-new"), // changed
         ],
+        &["**"],
     );
 
     let index = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1112,26 +1117,27 @@ fn test_merge_vendor_multiple_files() {
 
 #[test]
 fn test_merge_vendor_filters_unrelated_upstream_files() {
-    // Upstream tree contains extra files that are NOT tracked locally.
-    // They must not appear in the merge result.
+    // Upstream tree contains extra files beyond what the pattern selects.
+    // Only files matching the pattern should appear in the merge result.
     let (repo, _tmp, vendor) = setup_merge_scenario(
         "filter",
         &[("src/core.rs", b"fn core(){}")],
         &[
             ("src/core.rs", b"fn core(){}"),
-            ("src/extra.rs", b"fn extra(){}"), // not tracked locally
-            ("README.md", b"# hello"),         // not tracked locally
+            ("src/extra.rs", b"fn extra(){}"), // not matched by pattern
+            ("README.md", b"# hello"),         // not matched by pattern
         ],
+        &["**/core.rs"],
     );
 
     let index = repo.merge_vendor(&vendor, None, None).unwrap();
     assert!(
         !index.has_conflicts(),
-        "extra upstream files should be filtered out, leaving a clean merge"
+        "unmatched upstream files should be filtered out, leaving a clean merge"
     );
 
-    // Verify that the merge index only contains the tracked file (plus
-    // the gitattributes entry from ours).
+    // Verify that the merge index only contains the pattern-matched file
+    // (plus the gitattributes entry from ours).
     let entries: Vec<_> = index.iter().collect();
     let paths: Vec<String> = entries
         .iter()
@@ -1144,5 +1150,77 @@ fn test_merge_vendor_filters_unrelated_upstream_files() {
     assert!(
         !paths.contains(&"README.md".to_string()),
         "README.md should not be in merge index, got: {paths:?}"
+    );
+}
+
+#[test]
+fn test_merge_vendor_picks_up_new_upstream_file() {
+    // Upstream adds a new file that matches the vendor's patterns.
+    // merge_vendor should include it even though no local gitattributes
+    // entry exists for it yet.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    let vendor_name = "newfile";
+
+    // Local has one vendored file.
+    let attrs = "a.txt vendor=newfile\n";
+    std::fs::write(tmp.path().join(".gitattributes"), attrs).unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "original\n").unwrap();
+
+    // Initial commit.
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+    let _base_oid = repo
+        .commit(Some("HEAD"), &test_sig(), &test_sig(), "base", &tree, &[])
+        .unwrap();
+
+    // Upstream adds b.txt alongside a.txt.
+    let upstream_tree = build_tree(&repo, &[("a.txt", b"original\n"), ("b.txt", b"new file\n")]);
+    commit_tree_to_ref(
+        &repo,
+        &format!("refs/vendor/{vendor_name}"),
+        &upstream_tree,
+        "upstream adds b.txt",
+    );
+
+    let base_tree = build_tree(&repo, &[("a.txt", b"original\n")]);
+    let base_tree_commit = repo
+        .commit(
+            None,
+            &test_sig(),
+            &test_sig(),
+            "base tree commit",
+            &base_tree,
+            &[],
+        )
+        .unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        branch: None,
+        base: Some(base_tree_commit.to_string()),
+        patterns: vec!["**".into()],
+    };
+
+    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
+    assert!(
+        !idx.has_conflicts(),
+        "adding a new file should merge cleanly"
+    );
+
+    let paths: Vec<String> = idx
+        .iter()
+        .map(|e| String::from_utf8_lossy(&e.path).to_string())
+        .collect();
+    assert!(
+        paths.contains(&"b.txt".to_string()),
+        "new upstream file b.txt should be in merge index, got: {paths:?}"
     );
 }

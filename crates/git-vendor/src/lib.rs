@@ -13,6 +13,26 @@ use std::{
 
 use git2::Repository;
 
+/// Build a [`globset::GlobSet`] from a slice of pattern strings, normalizing
+/// trailing-`/` directory shorthands to `dir/**`.
+fn build_glob_matcher(patterns: &[impl AsRef<str>]) -> Result<globset::GlobSet, git2::Error> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pat in patterns {
+        let pat = pat.as_ref();
+        let normalized = if pat.ends_with('/') {
+            format!("{}**", pat)
+        } else {
+            pat.to_string()
+        };
+        let g = globset::Glob::new(&normalized)
+            .map_err(|e| git2::Error::from_str(&format!("Invalid pattern '{}': {}", pat, e)))?;
+        builder.add(g);
+    }
+    builder
+        .build()
+        .map_err(|e| git2::Error::from_str(&e.to_string()))
+}
+
 /// All metadata required to retrieve necessary objects from a vendor.
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct VendorSource {
@@ -152,6 +172,16 @@ pub trait Vendor {
         &self,
         vendor: &VendorSource,
         globs: &[&str],
+        path: &Path,
+    ) -> Result<(), git2::Error>;
+
+    /// Refresh `.gitattributes` after a merge so that per-file entries match
+    /// the merged result.  New upstream files get entries; deleted files lose
+    /// them.
+    fn refresh_vendor_attrs(
+        &self,
+        vendor: &VendorSource,
+        merged_index: &git2::Index,
         path: &Path,
     ) -> Result<(), git2::Error>;
 
@@ -337,19 +367,9 @@ impl Vendor for Repository {
         let gitattributes = workdir.join(path).join(".gitattributes");
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
 
-        // For each user-provided glob, collect the unique upstream prefixes
-        // (directory components) where matching files reside, then write one
-        // gitattributes line per (glob, prefix) pair instead of one per file.
         for glob in globs {
-            let normalized = if glob.ends_with('/') {
-                format!("{}**", glob)
-            } else {
-                glob.to_string()
-            };
-            let compiled = globset::Glob::new(&normalized).map_err(|e| {
-                git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e))
-            })?;
-            let matcher = compiled.compile_matcher();
+            let glob_patterns: Vec<String> = vec![glob.to_string()];
+            let matcher = build_glob_matcher(&glob_patterns)?;
 
             let mut matched_files: Vec<PathBuf> = Vec::new();
 
@@ -390,23 +410,7 @@ impl Vendor for Repository {
         _path: &Path,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        let mut glob_builder = globset::GlobSetBuilder::new();
-        for glob in globs {
-            // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
-            // globset matches all files under that directory recursively.
-            let pat = if glob.ends_with('/') {
-                format!("{}**", glob)
-            } else {
-                glob.to_string()
-            };
-            let g = globset::Glob::new(&pat).map_err(|e| {
-                git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e))
-            })?;
-            glob_builder.add(g);
-        }
-        let matcher = glob_builder
-            .build()
-            .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+        let matcher = build_glob_matcher(globs)?;
 
         // Build the set of upstream paths that match the glob pattern.
         let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
@@ -453,6 +457,15 @@ impl Vendor for Repository {
         _maybe_opts: Option<&mut git2::FetchOptions>,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
+        // UPSTREAM (theirs): use stored patterns to filter the upstream tree.
+        // This catches files added upstream since the last merge.
+        let matcher = build_glob_matcher(&vendor.patterns)?;
+        let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let theirs_filtered =
+            self.filter_by_predicate(&theirs, |_repo, path| matcher.is_match(path))?;
+
+        // LOCAL (ours): use gitattributes to find files currently tracked for
+        // this vendor.  This respects any manual edits to .gitattributes.
         let expected_vendor = vendor.name.clone();
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered = self.filter_by_predicate(&ours, |repo, path| {
@@ -460,21 +473,6 @@ impl Vendor for Repository {
                 Ok(Some(value)) => value == expected_vendor,
                 _ => false,
             }
-        })?;
-
-        let mut expected_remote: HashSet<PathBuf> = HashSet::new();
-        ours_filtered.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-            if entry.kind() != Some(git2::ObjectType::Blob) {
-                return git2::TreeWalkResult::Ok;
-            }
-            let local_path = PathBuf::from(dir).join(entry.name().unwrap());
-            expected_remote.insert(local_path);
-            git2::TreeWalkResult::Ok
-        })?;
-
-        let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
-        let theirs_filtered = self.filter_by_predicate(&theirs, |_repo, path| {
-            expected_remote.contains(&PathBuf::from(path))
         })?;
 
         let mut opts = git2::MergeOptions::new();
@@ -490,6 +488,76 @@ impl Vendor for Repository {
         };
 
         self.merge_trees(&base, &ours_filtered, &theirs_filtered, Some(&opts))
+    }
+
+    fn refresh_vendor_attrs(
+        &self,
+        vendor: &VendorSource,
+        merged_index: &git2::Index,
+        path: &Path,
+    ) -> Result<(), git2::Error> {
+        let workdir = self
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let gitattributes = workdir.join(path).join(".gitattributes");
+        let vendor_attr = format!("vendor={}", vendor.name);
+        let matcher = build_glob_matcher(&vendor.patterns)?;
+
+        // Collect all paths in the merged index that match the vendor's patterns.
+        let mut merged_paths: HashSet<PathBuf> = HashSet::new();
+        for entry in merged_index.iter() {
+            let stage = (entry.flags >> 12) & 0x3;
+            if stage != 0 {
+                continue;
+            }
+            if let Ok(entry_path) = std::str::from_utf8(&entry.path) {
+                let p = PathBuf::from(entry_path);
+                if matcher.is_match(&p) {
+                    merged_paths.insert(p);
+                }
+            }
+        }
+
+        // Read existing gitattributes, remove stale entries for this vendor,
+        // keep everything else.
+        let needle = format!("vendor={}", vendor.name);
+        let mut lines: Vec<String> = if gitattributes.exists() {
+            let content = std::fs::read_to_string(&gitattributes)
+                .map_err(|e| git2::Error::from_str(&format!("read .gitattributes: {e}")))?;
+            content
+                .lines()
+                .filter(|line| {
+                    // Keep lines that don't belong to this vendor.
+                    !line.split_whitespace().any(|tok| tok == needle)
+                })
+                .map(String::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Add per-file entries for all merged paths.
+        let mut sorted: Vec<_> = merged_paths.into_iter().collect();
+        sorted.sort();
+        for file in sorted {
+            let local_pattern = path.join(&file);
+            let line = format!("{} {}", local_pattern.to_string_lossy(), vendor_attr);
+            lines.push(line);
+        }
+
+        // Write back.
+        if let Some(parent) = gitattributes.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                git2::Error::from_str(&format!("create dir for .gitattributes: {e}"))
+            })?;
+        }
+        let mut content = lines.join("\n");
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        std::fs::write(&gitattributes, &content)
+            .map_err(|e| git2::Error::from_str(&format!("write .gitattributes: {e}")))?;
+        Ok(())
     }
 
     fn find_vendor_base(

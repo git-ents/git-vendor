@@ -605,5 +605,19 @@ fn merge_vendor(
 
     let merged_index = repo.merge_vendor(vendor, None, file_favor)?;
 
-    checkout_and_stage(repo, merged_index, updated)
+    // Refresh .gitattributes: add entries for new upstream files, remove
+    // entries for files deleted upstream.
+    repo.refresh_vendor_attrs(vendor, &merged_index, Path::new("."))?;
+
+    let outcome = checkout_and_stage(repo, merged_index, updated)?;
+
+    // Stage metadata files that checkout_and_stage does not cover.
+    let mut repo_index = repo.index()?;
+    repo_index.add_path(Path::new(".gitvendors"))?;
+    if Path::new(".gitattributes").exists() {
+        repo_index.add_path(Path::new(".gitattributes"))?;
+    }
+    repo_index.write()?;
+
+    Ok(outcome)
 }

@@ -650,6 +650,7 @@ fn test_merge_vendor_two_way_no_conflicts() {
         r#"
 [vendor "upstream"]
     url = https://example.com/upstream.git
+    pattern = **
 "#,
     );
 
@@ -677,6 +678,7 @@ fn test_merge_vendor_two_way_empty_vendored_set() {
         r#"
 [vendor "upstream"]
     url = https://example.com/upstream.git
+    pattern = **
 "#,
     );
 
@@ -834,6 +836,7 @@ fn test_end_to_end_fetch_then_merge_two_way_clean() {
         r#"
 [vendor "upstream"]
     url = {url}
+    pattern = **
 "#,
         url = remote.url()
     ));
@@ -871,6 +874,7 @@ fn test_end_to_end_fetch_then_merge_three_way_clean() {
 [vendor "upstream"]
     url = {url}
     base = {base_oid}
+    pattern = **
 "#,
         url = remote.url()
     ));
@@ -906,6 +910,7 @@ fn test_end_to_end_fetch_then_merge_three_way_conflict_then_resolve() {
 [vendor "upstream"]
     url = {url}
     base = {base_oid}
+    pattern = **
 "#,
         url = remote.url()
     ));
@@ -1000,6 +1005,7 @@ fn test_end_to_end_fetch_then_merge_multiple_files_partial_conflict() {
 [vendor "upstream"]
     url = {url}
     base = {base_oid}
+    pattern = **
 "#,
         url = remote.url()
     ));
@@ -1089,6 +1095,7 @@ fn test_merge_vendor_three_way_clean_merge() {
 [vendor "upstream"]
     url = https://example.com/upstream.git
     base = {base_commit}
+    pattern = **
 "#,
     ));
 
