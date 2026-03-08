@@ -27,16 +27,16 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 ///
 /// * `name`       – unique identifier stored in `.gitvendors`
 /// * `url`        – remote URL to vendor from
-/// * `branch`     – upstream branch to track (`None` → HEAD)
-/// * `pattern`    – glob selecting which upstream files to vendor (e.g. `"**"`)
-/// * `local_root` – local directory for vendored files; defaults to `name`
+/// * `branch`  – upstream branch to track (`None` → HEAD)
+/// * `pattern` – glob selecting which upstream files to vendor (e.g. `"**"`)
+/// * `path`    – local directory for vendored files; defaults to `"."`
 pub fn add(
     repo: &Repository,
     name: &str,
     url: &str,
     branch: Option<&str>,
     pattern: &str,
-    local_root: Option<&Path>,
+    path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if repo.get_vendor_by_name(name)?.is_some() {
         return Err(format!("vendor '{}' already exists", name).into());
@@ -62,8 +62,8 @@ pub fn add(
     repo.fetch_vendor(&source, None)?;
 
     // Track the requested pattern
-    let root = local_root.unwrap_or_else(|| Path::new(name));
-    repo.track_vendor_pattern(&source, pattern, root)?;
+    let path = path.unwrap_or_else(|| Path::new("."));
+    repo.track_vendor_pattern(&source, pattern, path)?;
 
     Ok(())
 }

@@ -543,7 +543,7 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
     });
 
     // .gitattributes should now contain entries for both files under `lib/`.
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
         content.contains("lib/a.txt") && content.contains("vendor=upstream"),
         "expected lib/a.txt vendor=upstream in:\n{content}"
@@ -576,7 +576,7 @@ fn test_track_vendor_pattern_selective_glob() {
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("src/.gitattributes")).unwrap();
     assert!(
         content.contains("src/main.rs") && content.contains("vendor=sel"),
         "expected src/main.rs vendor=sel in:\n{content}"
@@ -608,7 +608,7 @@ fn test_track_vendor_pattern_nested_directory() {
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
     assert!(
         content.contains("vendor/deep.txt"),
         "expected vendor/deep.txt in:\n{content}"
@@ -638,7 +638,7 @@ fn test_track_vendor_pattern_writes_prefix_attribute() {
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("third_party/.gitattributes")).unwrap();
     assert!(
         content.contains("third_party/foo.c"),
         "expected third_party/foo.c in:\n{content}"

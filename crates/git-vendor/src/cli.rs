@@ -26,11 +26,12 @@ pub enum Command {
 
     /// Add a new vendor source.
     Add {
-        /// A unique name for this vendor (used in config keys and ref names).
-        name: String,
-
         /// The remote URL to vendor from.
         url: String,
+
+        /// A unique name for this vendor (used in config keys and ref names).
+        /// Defaults to the basename of the URL, minus any `.git` suffix.
+        name: Option<String>,
 
         /// The upstream branch to track (defaults to HEAD).
         #[arg(short, long)]
@@ -40,9 +41,8 @@ pub enum Command {
         #[arg(short, long, default_value = "**")]
         pattern: String,
 
-        /// Local directory where vendored files are placed.
-        #[arg(short, long)]
-        local_root: Option<PathBuf>,
+        /// Local directory where vendored files are placed (defaults to current directory).
+        path: Option<PathBuf>,
     },
 
     /// Fetch the latest upstream commits for one or all vendors.
@@ -59,4 +59,22 @@ pub enum Command {
         /// Vendor name. If omitted, merges all vendors.
         name: Option<String>,
     },
+}
+
+/// Derive a vendor name from a URL by taking the last path component and
+/// stripping a trailing `.git` suffix, if present.
+///
+/// ```
+/// # use git_vendor::cli::name_from_url;
+/// assert_eq!(name_from_url("https://github.com/org/repo.git"), "repo");
+/// assert_eq!(name_from_url("https://github.com/org/repo"), "repo");
+/// assert_eq!(name_from_url("git@github.com:org/my-lib.git"), "my-lib");
+/// assert_eq!(name_from_url("/local/path/to/repo.git"), "repo");
+/// ```
+pub fn name_from_url(url: &str) -> &str {
+    let url = url.trim_end_matches('/');
+    let basename = url.rsplit_once('/').map_or(url, |(_, b)| b);
+    // Also handle SCP-style URLs like `git@host:path/repo.git`
+    let basename = basename.rsplit_once(':').map_or(basename, |(_, b)| b);
+    basename.strip_suffix(".git").unwrap_or(basename)
 }

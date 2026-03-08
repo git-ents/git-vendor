@@ -1,5 +1,5 @@
 use clap::{CommandFactory, Parser};
-use git_vendor::cli::{Cli, Command};
+use git_vendor::cli::{self, Cli, Command};
 use git_vendor::exe;
 use std::path::PathBuf;
 use std::process;
@@ -42,19 +42,20 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Command::Add {
-            name,
             url,
+            name,
             branch,
             pattern,
-            local_root,
+            path,
         } => {
+            let name = name.as_deref().unwrap_or_else(|| cli::name_from_url(url));
             exe::add(
                 &repo,
                 name,
                 url,
                 branch.as_deref(),
                 pattern,
-                local_root.as_deref(),
+                path.as_deref(),
             )?;
             eprintln!("Added vendor '{name}'.");
         }

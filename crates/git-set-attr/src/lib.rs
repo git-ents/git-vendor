@@ -7,22 +7,19 @@ pub use git2::{Error, Repository};
 use std::{
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 /// A trait which provides methods for settings attributes in a Git repository.
 pub trait SetAttr {
-    /// Set attributes in the appropriate `.gitattributes` file.
+    /// Set attributes in the given `.gitattributes` file.
     ///
-    /// The `.gitattributes` file in the current directory is used if one exists;
-    /// otherwise, the `.gitattributes` file found first while
-    /// walking up the directory tree from the current directory to the
-    /// repository's root directory is used.
+    /// The file will be created if it does not already exist.
     fn set_attr(
         &self,
         pattern: &str,
         attributes: &[&str],
-        maybe_gitattributes: Option<&Path>,
+        gitattributes: &Path,
     ) -> Result<(), Error>;
 }
 
@@ -31,13 +28,9 @@ impl SetAttr for Repository {
         &self,
         pattern: &str,
         attributes: &[&str],
-        maybe_gitattributes: Option<&Path>,
+        gitattributes: &Path,
     ) -> Result<(), Error> {
-        let gitattributes_path = if let Some(path) = maybe_gitattributes {
-            path.to_path_buf()
-        } else {
-            find_gitattributes_file(self)?
-        };
+        let gitattributes_path = gitattributes;
 
         validate_attributes(attributes)?;
 
@@ -60,11 +53,19 @@ impl SetAttr for Repository {
             lines.push(attr_line);
         }
 
+        if let Some(parent) = gitattributes_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                Error::from_str(&format!(
+                    "Failed to create directory for .gitattributes: {e}"
+                ))
+            })?;
+        }
+
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&gitattributes_path)
+            .open(gitattributes_path)
             .map_err(|e| {
                 Error::from_str(&format!("Failed to open .gitattributes for writing: {e}"))
             })?;
@@ -201,26 +202,6 @@ fn format_attribute_line(pattern: &str, attributes: &[impl AsRef<str>]) -> Strin
     }
 
     line
-}
-
-/// Find the appropriate `.gitattributes` file by walking from the current
-/// directory up to the repository root.
-///
-/// Returns the path of the first `.gitattributes` file found, or defaults to
-/// `<current_dir>/.gitattributes` (which will be created on first write).
-fn find_gitattributes_file(repo: &Repository) -> Result<PathBuf, Error> {
-    // check if `.gitattributes` exists in the tree
-    let tree = repo.head()?.peel_to_tree()?;
-    let entry = tree
-        .get_name(".gitattributes")
-        .ok_or_else(|| Error::from_str(".gitattributes not found"))?;
-
-    let file = entry.name().ok_or_else(|| {
-        // this should never happen
-        Error::from_str(".gitattributes file name is not valid UTF-8; this is an internal error")
-    })?;
-
-    Ok(file.into())
 }
 
 #[cfg(test)]

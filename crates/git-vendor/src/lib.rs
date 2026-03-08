@@ -125,7 +125,7 @@ pub trait Vendor {
         &self,
         vendor: &VendorSource,
         glob: &str,
-        local_root: &Path,
+        path: &Path,
     ) -> Result<(), git2::Error>;
 
     /// Fetch the upstream for the given vendor and advance `refs/vendor/$name`.
@@ -261,8 +261,12 @@ impl Vendor for Repository {
         &self,
         vendor: &VendorSource,
         glob: &str,
-        local_root: &Path,
+        path: &Path,
     ) -> Result<(), git2::Error> {
+        let workdir = self
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let gitattributes = workdir.join(path).join(".gitattributes");
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
         // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
         // globset matches all files under that directory recursively.
@@ -291,14 +295,14 @@ impl Vendor for Repository {
                 return git2::TreeWalkResult::Ok;
             }
             let prefix = remote_path.parent().unwrap_or(Path::new(""));
-            let local_path = local_root.join(entry.name().unwrap());
+            let local_path = path.join(entry.name().unwrap());
             let vendor_attr = format!("vendor={}", vendor.name);
             let prefix_attr = format!("vendor-prefix={}", prefix.display());
 
             match self.set_attr(
                 &local_path.to_string_lossy(),
                 &[&vendor_attr, &prefix_attr],
-                None,
+                &gitattributes,
             ) {
                 Ok(_) => return git2::TreeWalkResult::Ok,
                 Err(_) => return git2::TreeWalkResult::Abort,
