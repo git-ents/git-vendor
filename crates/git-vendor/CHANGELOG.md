@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.0](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.0.2...git-vendor-v0.1.0) (2026-03-08)
+
+
+### Features
+
+* Add `pull` subcommand (fetch + merge) ([7640e17](https://github.com/git-ents/git-vendor/commit/7640e1718bd52bd30de00f08542edc3b664ce908))
+* Define initial release ([a84e912](https://github.com/git-ents/git-vendor/commit/a84e912f8a5c5e06f1988444a6c8ed304a485fa1))
+
+
+### Bug Fixes
+
+* Skip merge when base already matches latest vendor ref ([42f089d](https://github.com/git-ents/git-vendor/commit/42f089d634f9dc772e20a97b35be7fab2b3d732c))
+* Strip "./" prefix from gitattributes patterns and filter base tree ([0f8afa2](https://github.com/git-ents/git-vendor/commit/0f8afa26a8851fd34481e96c0aa5a4cd90e4926f))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * git-set-attr bumped from 0.0.1 to 0.1.0
+
 ## [0.0.2](https://github.com/git-ents/git-vendor/compare/v0.0.1...v0.0.2) (2026-03-08)
 
 
