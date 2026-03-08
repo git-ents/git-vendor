@@ -127,6 +127,16 @@ pub enum Command {
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
         strategy_option: StrategyOption,
     },
+
+    /// Fetch and merge upstream changes for one or all vendors.
+    Pull {
+        /// Vendor name. If omitted, pulls all vendors.
+        name: Option<String>,
+
+        /// Strategy option for resolving conflicting regions during the merge.
+        #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
+        strategy_option: StrategyOption,
+    },
 }
 
 /// Derive a vendor name from a URL by taking the last path component and

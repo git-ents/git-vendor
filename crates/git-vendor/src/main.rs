@@ -194,6 +194,61 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+
+        Command::Pull {
+            name,
+            strategy_option,
+        } => {
+            let file_favor = match strategy_option {
+                cli::StrategyOption::Normal => None,
+                other => Some(other.to_file_favor()),
+            };
+
+            // Fetch
+            match name {
+                Some(n) => {
+                    if let Some(oid) = exe::fetch_one(&repo, n)? {
+                        eprintln!("Fetched '{}' -> {}", n, oid);
+                    }
+                }
+                None => {
+                    if repo.list_vendors()?.is_empty() {
+                        println!("No vendors configured.");
+                        return Ok(());
+                    }
+                    for (vname, oid) in &exe::fetch_all(&repo)? {
+                        eprintln!("Fetched '{}' -> {}", vname, oid);
+                    }
+                }
+            }
+
+            // Merge
+            let outcomes = match name {
+                Some(n) => {
+                    let outcome = exe::merge_one(&repo, n, file_favor)?;
+                    vec![(n.clone(), outcome)]
+                }
+                None => exe::merge_all(&repo, file_favor)?,
+            };
+
+            for (vname, outcome) in &outcomes {
+                match outcome {
+                    exe::MergeOutcome::Clean { vendor } => {
+                        eprintln!(
+                            "'{}' merged cleanly (base {}).",
+                            vname,
+                            vendor.base.as_deref().unwrap_or("(none)"),
+                        );
+                    }
+                    exe::MergeOutcome::Conflict { .. } => {
+                        eprintln!(
+                            "Conflicts detected for '{}'. Resolve them and commit.",
+                            vname
+                        );
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
