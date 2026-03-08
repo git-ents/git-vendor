@@ -74,11 +74,39 @@ pub fn add(
     let path = path.unwrap_or_else(|| Path::new("."));
     repo.track_vendor_pattern(&source, pattern, path)?;
 
-    // Merge the vendor into the working tree and stage.
-    let outcome = merge_vendor(repo, &source)?;
+    // Perform the initial one-time merge using the glob pattern directly,
+    // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
+    let merged_index = repo.add_vendor(&source, pattern, path)?;
 
-    // Stage metadata files that `merge_vendor` does not cover.
+    // Update base in .gitvendors to the current upstream tip.
+    let vendor_ref = repo.find_reference(&source.head_ref())?;
+    let vendor_commit = vendor_ref.peel_to_commit()?;
+    let updated = VendorSource {
+        name: source.name.clone(),
+        url: source.url.clone(),
+        branch: source.branch.clone(),
+        base: Some(vendor_commit.id().to_string()),
+    };
+    {
+        let mut cfg = repo.vendor_config()?;
+        updated.to_config(&mut cfg)?;
+    }
+
+    // Write each merged entry to the working directory and stage it.
     let mut repo_index = repo.index()?;
+    for entry in merged_index.iter() {
+        let blob = repo.find_blob(entry.id)?;
+        let entry_path = std::str::from_utf8(&entry.path)
+            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
+        let full_path = workdir.join(entry_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&full_path, blob.content())?;
+        repo_index.add_path(Path::new(entry_path))?;
+    }
+
+    // Stage metadata files.
     repo_index.add_path(Path::new(".gitvendors"))?;
     let attr_path = if path == Path::new(".") {
         std::path::PathBuf::from(".gitattributes")
@@ -90,10 +118,6 @@ pub fn add(
     }
     repo_index.write()?;
 
-    let updated = match outcome {
-        MergeOutcome::Clean { vendor } => vendor,
-        MergeOutcome::Conflict { vendor, .. } => vendor,
-    };
     Ok(updated)
 }
 

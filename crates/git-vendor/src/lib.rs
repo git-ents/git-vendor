@@ -136,6 +136,22 @@ pub trait Vendor {
         maybe_opts: Option<&mut git2::FetchOptions>,
     ) -> Result<git2::Reference<'a>, git2::Error>;
 
+    /// Perform the initial add of a vendor source.
+    ///
+    /// Unlike `merge_vendor`, which relies on files already present in HEAD to
+    /// determine the upstream ↔ local mapping, `add_vendor` uses the given
+    /// `glob` and `path` to filter the upstream tree directly.  This makes it
+    /// suitable for the first-time add where no vendor files exist in HEAD yet.
+    ///
+    /// The resulting `git2::Index` contains the merged entries ready to be
+    /// written to the working tree and staged.
+    fn add_vendor(
+        &self,
+        vendor: &VendorSource,
+        glob: &str,
+        path: &Path,
+    ) -> Result<git2::Index, git2::Error>;
+
     /// If a `base` exists in the vendor source provided (by `name`),
     /// initiate a three-way merge with the base reference, the
     /// commit provided (defaulting to the repository's `HEAD`),
@@ -174,6 +190,7 @@ fn bail_if_bare(repo: &Repository) -> Result<(), git2::Error> {
 
     Ok(())
 }
+
 impl Vendor for Repository {
     fn vendor_config(&self) -> Result<git2::Config, git2::Error> {
         bail_if_bare(self)?;
@@ -310,6 +327,60 @@ impl Vendor for Repository {
         })?;
 
         Ok(())
+    }
+
+    fn add_vendor(
+        &self,
+        vendor: &VendorSource,
+        glob: &str,
+        _path: &Path,
+    ) -> Result<git2::Index, git2::Error> {
+        // Normalize a trailing `/` (directory shorthand) to `dir/**` so that
+        // globset matches all files under that directory recursively.
+        let normalized: String;
+        let pat = if glob.ends_with('/') {
+            normalized = format!("{}**", glob);
+            normalized.as_str()
+        } else {
+            glob
+        };
+
+        let mut glob_builder = globset::GlobSetBuilder::new();
+        let g = globset::Glob::new(pat)
+            .map_err(|e| git2::Error::from_str(&format!("Invalid pattern '{}': {}", glob, e)))?;
+        glob_builder.add(g);
+        let matcher = glob_builder
+            .build()
+            .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+
+        // Build the set of upstream paths that match the glob pattern.
+        let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let theirs_filtered =
+            self.filter_by_predicate(&theirs, |_repo, entry_path| matcher.is_match(entry_path))?;
+
+        // Build ours_filtered from HEAD for files already attributed to this
+        // vendor (will typically be empty on initial add).
+        let expected_vendor = vendor.name.clone();
+        let ours = self.head()?.peel_to_tree()?;
+        let ours_filtered = self.filter_by_predicate(&ours, |repo, p| {
+            match repo.get_attr(p, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
+                Ok(Some(value)) => value == expected_vendor,
+                _ => false,
+            }
+        })?;
+
+        let mut opts = git2::MergeOptions::new();
+        opts.find_renames(true);
+        opts.rename_threshold(50);
+
+        // Use ours_filtered as the base so that all of theirs_filtered shows
+        // up as new content to be added.
+        self.merge_trees(
+            &ours_filtered,
+            &ours_filtered,
+            &theirs_filtered,
+            Some(&opts),
+        )
     }
 
     fn merge_vendor(
