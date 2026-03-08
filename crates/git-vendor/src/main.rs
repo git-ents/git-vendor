@@ -100,6 +100,22 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         },
 
+        Command::Track { name, pattern } => {
+            let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
+            exe::track(&repo, name, &patterns)?;
+            for p in &patterns {
+                eprintln!("Tracking '{}' for vendor '{}'.", p, name);
+            }
+        }
+
+        Command::Untrack { name, pattern } => {
+            let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
+            exe::untrack(&repo, name, &patterns)?;
+            for p in &patterns {
+                eprintln!("Untracking '{}' for vendor '{}'.", p, name);
+            }
+        }
+
         Command::Rm { name } => {
             exe::rm(&repo, name)?;
             eprintln!("Removed vendor '{}'.", name);

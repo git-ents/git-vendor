@@ -116,6 +116,52 @@ pub fn add(
     Ok(outcome)
 }
 
+/// Add pattern(s) to an existing vendor's configuration in `.gitvendors`.
+///
+/// Only edits `.gitvendors` — does not fetch, merge, or touch `.gitattributes`.
+/// Run `git vendor merge` to apply the new patterns.
+pub fn track(
+    repo: &Repository,
+    name: &str,
+    patterns: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut vendor = repo
+        .get_vendor_by_name(name)?
+        .ok_or_else(|| format!("vendor '{}' not found", name))?;
+
+    for pat in patterns {
+        let pat = pat.to_string();
+        if !vendor.patterns.contains(&pat) {
+            vendor.patterns.push(pat);
+        }
+    }
+
+    let mut cfg = repo.vendor_config()?;
+    vendor.to_config(&mut cfg)?;
+    Ok(())
+}
+
+/// Remove pattern(s) from an existing vendor's configuration in `.gitvendors`.
+///
+/// Only edits `.gitvendors` — does not touch `.gitattributes` or the working tree.
+/// Run `git vendor merge` to reconcile.
+pub fn untrack(
+    repo: &Repository,
+    name: &str,
+    patterns: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut vendor = repo
+        .get_vendor_by_name(name)?
+        .ok_or_else(|| format!("vendor '{}' not found", name))?;
+
+    let to_remove: std::collections::HashSet<&str> = patterns.iter().copied().collect();
+    vendor.patterns.retain(|p| !to_remove.contains(p.as_str()));
+
+    let mut cfg = repo.vendor_config()?;
+    vendor.to_config(&mut cfg)?;
+    Ok(())
+}
+
 /// Fetch the latest upstream commits for a single vendor.
 ///
 /// Returns `Some(oid)` if the ref advanced, or `None` if already up-to-date.

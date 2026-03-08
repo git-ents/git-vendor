@@ -92,6 +92,26 @@ pub enum Command {
         name: String,
     },
 
+    /// Add glob pattern(s) to an existing vendor's configuration.
+    Track {
+        /// Vendor name.
+        name: String,
+
+        /// Glob pattern(s) to add.
+        #[arg(short, long, required = true)]
+        pattern: Vec<String>,
+    },
+
+    /// Remove glob pattern(s) from an existing vendor's configuration.
+    Untrack {
+        /// Vendor name.
+        name: String,
+
+        /// Glob pattern(s) to remove.
+        #[arg(short, long, required = true)]
+        pattern: Vec<String>,
+    },
+
     /// Show which vendors have unmerged upstream changes.
     Status,
 
