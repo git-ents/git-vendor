@@ -25,7 +25,7 @@ Storing this metadata in-source allows all users to fetch and merge the latest v
 The `git-set-attr` plumbing command can be installed with `cargo install`.
 
 ```shell
-cargo install --git https://github.com/git-ents/git-vendor git-set-attr
+cargo install --locked git-set-attr
 ```
 
 If `~/.cargo/bin` is on your `PATH`, you can invoke the command with `git`.
@@ -39,5 +39,5 @@ git set-attr -h
 The `git-set-attr` library can be added to your Rust project via `cargo add`.
 
 ```shell
-cargo add --git https://github.com/git-ents/git-vendor git-set-attr
+cargo add git-set-attr
 ```
