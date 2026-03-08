@@ -1,0 +1,11 @@
+./.config/committed.toml vendor=git-rewrite
+./.config/deny.toml vendor=git-rewrite
+./.config/pre-commit.yaml vendor=git-rewrite
+./.config/release-please-config.json vendor=git-rewrite
+./.config/release-please-manifest.json vendor=git-rewrite
+./.config/rumdl.toml vendor=git-rewrite
+./.config/typos.toml vendor=git-rewrite
+./.github/workflows/CD.yml vendor=git-rewrite
+./.github/workflows/CI.yml vendor=git-rewrite
+./.github/workflows/Lint.yml vendor=git-rewrite
+./.github/workflows/Version.yml vendor=git-rewrite
