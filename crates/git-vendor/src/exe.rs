@@ -74,10 +74,6 @@ pub fn add(
     let path = path.unwrap_or_else(|| Path::new("."));
     repo.track_vendor_pattern(&source, pattern, path)?;
 
-    // Perform the initial one-time merge using the glob pattern directly,
-    // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
-    let merged_index = repo.add_vendor(&source, pattern, path)?;
-
     // Update base in .gitvendors to the current upstream tip.
     let vendor_ref = repo.find_reference(&source.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
@@ -92,28 +88,16 @@ pub fn add(
         updated.to_config(&mut cfg)?;
     }
 
-    if merged_index.has_conflicts() {
-        return Ok(MergeOutcome::Conflict {
-            index: merged_index,
-            vendor: updated,
-        });
-    }
+    // Perform the initial one-time merge using the glob pattern directly,
+    // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
+    let merged_index = repo.add_vendor(&source, pattern, path)?;
 
-    // Write each merged entry to the working directory and stage it.
+    // Write merged result (including conflict markers) to the working tree
+    // and stage clean entries.
+    let outcome = checkout_and_stage(repo, merged_index, updated)?;
+
+    // Stage metadata files that checkout_and_stage does not cover.
     let mut repo_index = repo.index()?;
-    for entry in merged_index.iter() {
-        let blob = repo.find_blob(entry.id)?;
-        let entry_path = std::str::from_utf8(&entry.path)
-            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
-        let full_path = workdir.join(entry_path);
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&full_path, blob.content())?;
-        repo_index.add_path(Path::new(entry_path))?;
-    }
-
-    // Stage metadata files.
     repo_index.add_path(Path::new(".gitvendors"))?;
     let attr_path = if path == Path::new(".") {
         std::path::PathBuf::from(".gitattributes")
@@ -125,7 +109,7 @@ pub fn add(
     }
     repo_index.write()?;
 
-    Ok(MergeOutcome::Clean { vendor: updated })
+    Ok(outcome)
 }
 
 /// Fetch the latest upstream commits for a single vendor.
@@ -192,9 +176,10 @@ pub enum MergeOutcome {
         /// The vendor source with updated `base`.
         vendor: VendorSource,
     },
-    /// The merge has conflicts.  The returned `git2::Index` contains the
-    /// conflict entries.  The caller is responsible for presenting them to
-    /// the user.  `base` has still been updated in `.gitvendors`.
+    /// The merge has conflicts.  Conflict markers have been written to the
+    /// working tree.  The returned `git2::Index` contains the conflict
+    /// entries.  The caller is responsible for presenting them to the user.
+    /// `base` has still been updated in `.gitvendors`.
     Conflict {
         index: git2::Index,
         /// The vendor source with updated `base`.
@@ -238,19 +223,74 @@ pub fn merge_all(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Write the contents of a merged index to the working tree using libgit2's
+/// checkout machinery, then stage any cleanly-resolved entries in the
+/// repository's own index.
+///
+/// The checkout is scoped to only the paths present in `merged_index` so that
+/// unrelated working-tree files are left untouched.
+///
+/// Conflict markers are written for conflicted files using the merge style
+/// (`<<<<<<< ours` / `=======` / `>>>>>>> theirs`).
+///
+/// Returns `MergeOutcome::Conflict` when the index has conflicts, or
+/// `MergeOutcome::Clean` otherwise.
+fn checkout_and_stage(
+    repo: &Repository,
+    mut merged_index: git2::Index,
+    vendor: VendorSource,
+) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
+    let has_conflicts = merged_index.has_conflicts();
+
+    // Collect every path in the merged index so we can scope the checkout.
+    let paths: Vec<String> = merged_index
+        .iter()
+        .filter_map(|entry| std::str::from_utf8(&entry.path).ok().map(String::from))
+        .collect();
+
+    // Write merged entries (and conflict markers) to the working directory,
+    // touching only the paths that are part of this merge.
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    checkout.allow_conflicts(true);
+    checkout.conflict_style_merge(true);
+    for p in &paths {
+        checkout.path(p);
+    }
+    repo.checkout_index(Some(&mut merged_index), Some(&mut checkout))?;
+
+    // Stage cleanly-resolved (stage 0) entries in the repository index.
+    let mut repo_index = repo.index()?;
+    for entry in merged_index.iter() {
+        let stage = (entry.flags >> 12) & 0x3;
+        if stage != 0 {
+            continue;
+        }
+        let entry_path = std::str::from_utf8(&entry.path)
+            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
+        repo_index.add_path(Path::new(entry_path))?;
+    }
+    repo_index.write()?;
+
+    if has_conflicts {
+        Ok(MergeOutcome::Conflict {
+            index: merged_index,
+            vendor,
+        })
+    } else {
+        Ok(MergeOutcome::Clean { vendor })
+    }
+}
+
 /// Merge a single vendor's upstream into the working tree and stage the
 /// result.  Always updates `base` in `.gitvendors` to the current upstream
 /// tip.  No commit is created.
 ///
-/// Returns the updated `VendorSource`.
+/// Returns the updated `VendorSource` wrapped in a [`MergeOutcome`].
 fn merge_vendor(
     repo: &Repository,
     vendor: &VendorSource,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
 
@@ -268,28 +308,5 @@ fn merge_vendor(
 
     let merged_index = repo.merge_vendor(vendor, None)?;
 
-    if merged_index.has_conflicts() {
-        // Even with conflicts we have already persisted `base`.
-        return Ok(MergeOutcome::Conflict {
-            index: merged_index,
-            vendor: updated,
-        });
-    }
-
-    // Write each merged entry to the working directory and stage it.
-    let mut repo_index = repo.index()?;
-    for entry in merged_index.iter() {
-        let blob = repo.find_blob(entry.id)?;
-        let entry_path = std::str::from_utf8(&entry.path)
-            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
-        let full_path = workdir.join(entry_path);
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&full_path, blob.content())?;
-        repo_index.add_path(Path::new(entry_path))?;
-    }
-    repo_index.write()?;
-
-    Ok(MergeOutcome::Clean { vendor: updated })
+    checkout_and_stage(repo, merged_index, updated)
 }
