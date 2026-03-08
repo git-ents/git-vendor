@@ -22,11 +22,17 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
     repo.list_vendors()
 }
 
-/// Register a new vendor source, fetch its upstream, and set up attribute
-/// tracking for the given file pattern.
+/// Register a new vendor source, fetch its upstream, merge the vendor tree
+/// into the working directory, and stage everything in the index.
 ///
-/// * `name`       – unique identifier stored in `.gitvendors`
-/// * `url`        – remote URL to vendor from
+/// Behaves like `git submodule add`: the vendor files, `.gitvendors`, and
+/// `.gitattributes` are written to the working tree and staged in the index,
+/// but no commit is created.  The caller (or user) is expected to commit.
+///
+/// Returns the `VendorSource` with its `base` set to the fetched upstream tip.
+///
+/// * `name`    – unique identifier stored in `.gitvendors`
+/// * `url`     – remote URL to vendor from
 /// * `branch`  – upstream branch to track (`None` → HEAD)
 /// * `pattern` – glob selecting which upstream files to vendor (e.g. `"**"`)
 /// * `path`    – local directory for vendored files; defaults to `"."`
@@ -37,10 +43,14 @@ pub fn add(
     branch: Option<&str>,
     pattern: &str,
     path: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<VendorSource, Box<dyn std::error::Error>> {
     if repo.get_vendor_by_name(name)?.is_some() {
         return Err(format!("vendor '{}' already exists", name).into());
     }
+
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
 
     let source = VendorSource {
         name: name.to_string(),
@@ -50,22 +60,41 @@ pub fn add(
     };
 
     // Persist to .gitvendors config (create the file if it doesn't exist yet).
-    let mut cfg = repo.vendor_config().or_else(|_| {
-        let workdir = repo
-            .workdir()
-            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        git2::Config::open(&workdir.join(".gitvendors"))
-    })?;
-    source.to_config(&mut cfg)?;
+    {
+        let mut cfg = repo
+            .vendor_config()
+            .or_else(|_| git2::Config::open(&workdir.join(".gitvendors")))?;
+        source.to_config(&mut cfg)?;
+    }
 
-    // Fetch upstream
+    // Fetch upstream.
     repo.fetch_vendor(&source, None)?;
 
-    // Track the requested pattern
+    // Track the requested pattern.
     let path = path.unwrap_or_else(|| Path::new("."));
     repo.track_vendor_pattern(&source, pattern, path)?;
 
-    Ok(())
+    // Merge the vendor into the working tree and stage.
+    let outcome = merge_vendor(repo, &source)?;
+
+    // Stage metadata files that `merge_vendor` does not cover.
+    let mut repo_index = repo.index()?;
+    repo_index.add_path(Path::new(".gitvendors"))?;
+    let attr_path = if path == Path::new(".") {
+        std::path::PathBuf::from(".gitattributes")
+    } else {
+        path.join(".gitattributes")
+    };
+    if workdir.join(&attr_path).exists() {
+        repo_index.add_path(&attr_path)?;
+    }
+    repo_index.write()?;
+
+    let updated = match outcome {
+        MergeOutcome::Clean { vendor } => vendor,
+        MergeOutcome::Conflict { vendor, .. } => vendor,
+    };
+    Ok(updated)
 }
 
 /// Fetch the latest upstream commits for a single vendor.
@@ -126,20 +155,28 @@ pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error:
 
 /// Result of a single vendor merge.
 pub enum MergeOutcome {
-    /// The merge completed without conflicts and a merge commit was created.
+    /// The merge completed cleanly.  All changes are staged in the index and
+    /// written to the working tree, but no commit has been created.
     Clean {
-        /// The OID of the new merge commit on HEAD.
-        merge_commit: git2::Oid,
+        /// The vendor source with updated `base`.
+        vendor: VendorSource,
     },
-    /// The merge has conflicts. The caller is responsible for presenting them
-    /// to the user. The returned `git2::Index` contains the conflict entries.
-    Conflict { index: git2::Index },
+    /// The merge has conflicts.  The returned `git2::Index` contains the
+    /// conflict entries.  The caller is responsible for presenting them to
+    /// the user.  `base` has still been updated in `.gitvendors`.
+    Conflict {
+        index: git2::Index,
+        /// The vendor source with updated `base`.
+        vendor: VendorSource,
+    },
 }
 
 /// Merge upstream changes for a single vendor.
 ///
-/// On a clean merge this creates a merge commit on `HEAD` and updates the
-/// vendor's `base` in `.gitvendors` so that future merges are three-way.
+/// Writes the merged result to the working tree and stages it in the index.
+/// Always updates the vendor's `base` in `.gitvendors`.  No commit is created.
+///
+/// Returns the updated `VendorSource` wrapped in a [`MergeOutcome`].
 pub fn merge_one(
     repo: &Repository,
     name: &str,
@@ -170,43 +207,58 @@ pub fn merge_all(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Merge a single vendor's upstream into the working tree and stage the
+/// result.  Always updates `base` in `.gitvendors` to the current upstream
+/// tip.  No commit is created.
+///
+/// Returns the updated `VendorSource`.
 fn merge_vendor(
     repo: &Repository,
     vendor: &VendorSource,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
-    let mut index = repo.merge_vendor(vendor, None)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
 
-    if index.has_conflicts() {
-        return Ok(MergeOutcome::Conflict { index });
-    }
-
-    // Write the merged tree and create a merge commit.
-    let tree_oid = index.write_tree_to(repo)?;
-    let tree = repo.find_tree(tree_oid)?;
-    let head_commit = repo.head()?.peel_to_commit()?;
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
-    let sig = repo.signature()?;
 
-    let message = format!("Merge vendor '{}' at {}", vendor.name, vendor_commit.id());
-    let merge_commit = repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
-        &message,
-        &tree,
-        &[&head_commit, &vendor_commit],
-    )?;
-
-    // Update the base in .gitvendors so the next merge is three-way.
+    // Always update base in .gitvendors to the current upstream tip.
     let updated = VendorSource {
         name: vendor.name.clone(),
         url: vendor.url.clone(),
         branch: vendor.branch.clone(),
         base: Some(vendor_commit.id().to_string()),
     };
-    let mut cfg = repo.vendor_config()?;
-    updated.to_config(&mut cfg)?;
+    {
+        let mut cfg = repo.vendor_config()?;
+        updated.to_config(&mut cfg)?;
+    }
 
-    Ok(MergeOutcome::Clean { merge_commit })
+    let merged_index = repo.merge_vendor(vendor, None)?;
+
+    if merged_index.has_conflicts() {
+        // Even with conflicts we have already persisted `base`.
+        return Ok(MergeOutcome::Conflict {
+            index: merged_index,
+            vendor: updated,
+        });
+    }
+
+    // Write each merged entry to the working directory and stage it.
+    let mut repo_index = repo.index()?;
+    for entry in merged_index.iter() {
+        let blob = repo.find_blob(entry.id)?;
+        let entry_path = std::str::from_utf8(&entry.path)
+            .map_err(|e| git2::Error::from_str(&format!("invalid UTF-8 in path: {}", e)))?;
+        let full_path = workdir.join(entry_path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&full_path, blob.content())?;
+        repo_index.add_path(Path::new(entry_path))?;
+    }
+    repo_index.write()?;
+
+    Ok(MergeOutcome::Clean { vendor: updated })
 }
