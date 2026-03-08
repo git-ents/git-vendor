@@ -366,13 +366,14 @@ impl Vendor for Repository {
                         .unwrap_or_else(|| glob.to_string());
                     path.join(&glob_filename)
                 };
-                let prefix_attr = format!("vendor-prefix={}", prefix.display());
+                let mut attrs: Vec<&str> = vec![&vendor_attr];
+                let prefix_attr;
+                if !prefix.as_os_str().is_empty() {
+                    prefix_attr = format!("vendor-prefix={}", prefix.display());
+                    attrs.push(&prefix_attr);
+                }
 
-                self.set_attr(
-                    &local_pattern.to_string_lossy(),
-                    &[&vendor_attr, &prefix_attr],
-                    &gitattributes,
-                )?;
+                self.set_attr(&local_pattern.to_string_lossy(), &attrs, &gitattributes)?;
             }
         }
 

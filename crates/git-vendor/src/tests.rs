@@ -549,8 +549,8 @@ fn test_track_vendor_pattern_root_glob_marks_all_files() {
         "expected lib/*.txt vendor=upstream in:\n{content}"
     );
     assert!(
-        content.contains("vendor-prefix="),
-        "expected vendor-prefix= in:\n{content}"
+        !content.contains("vendor-prefix"),
+        "vendor-prefix should be absent for root-level files:\n{content}"
     );
     // No per-file splatting.
     assert!(
