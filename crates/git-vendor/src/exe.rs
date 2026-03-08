@@ -44,7 +44,6 @@ pub fn add(
     branch: Option<&str>,
     patterns: &[&str],
     path: Option<&Path>,
-    glob: bool,
     file_favor: Option<git2::FileFavor>,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     if repo.get_vendor_by_name(name)?.is_some() {
@@ -60,6 +59,7 @@ pub fn add(
         url: url.to_string(),
         branch: branch.map(String::from),
         base: None,
+        patterns: patterns.iter().map(|s| s.to_string()).collect(),
     };
 
     // Persist to .gitvendors config (create the file if it doesn't exist yet).
@@ -75,7 +75,7 @@ pub fn add(
 
     // Track the requested pattern(s).
     let path = path.unwrap_or_else(|| Path::new("."));
-    repo.track_vendor_pattern(&source, patterns, path, glob)?;
+    repo.track_vendor_pattern(&source, patterns, path)?;
 
     // Update base in .gitvendors to the current upstream tip.
     let vendor_ref = repo.find_reference(&source.head_ref())?;
@@ -85,6 +85,7 @@ pub fn add(
         url: source.url.clone(),
         branch: source.branch.clone(),
         base: Some(vendor_commit.id().to_string()),
+        patterns: source.patterns.clone(),
     };
     {
         let mut cfg = repo.vendor_config()?;
@@ -549,6 +550,7 @@ fn merge_vendor(
         url: vendor.url.clone(),
         branch: vendor.branch.clone(),
         base: Some(vendor_commit.id().to_string()),
+        patterns: vendor.patterns.clone(),
     };
     {
         let mut cfg = repo.vendor_config()?;

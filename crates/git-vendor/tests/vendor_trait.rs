@@ -480,6 +480,7 @@ fn test_find_vendor_base_returns_none_when_no_base() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     let result = tr.repo.find_vendor_base(&vs).unwrap();
@@ -499,6 +500,7 @@ fn test_find_vendor_base_returns_commit_when_base_exists() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: Some(commit_oid.to_string()),
+        patterns: vec![],
     };
 
     let commit = tr.repo.find_vendor_base(&vs).unwrap().unwrap();
@@ -513,6 +515,7 @@ fn test_find_vendor_base_errors_on_invalid_oid() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: Some("not-a-valid-sha".into()),
+        patterns: vec![],
     };
 
     assert!(tr.repo.find_vendor_base(&vs).is_err());
@@ -527,6 +530,7 @@ fn test_find_vendor_base_errors_on_nonexistent_commit() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into()),
+        patterns: vec![],
     };
 
     assert!(tr.repo.find_vendor_base(&vs).is_err());
@@ -773,6 +777,7 @@ fn test_fetch_vendor_fails_on_bad_url() {
         url: "file:///this/path/does/not/exist".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     assert!(tr.repo.fetch_vendor(&vs, None).is_err());

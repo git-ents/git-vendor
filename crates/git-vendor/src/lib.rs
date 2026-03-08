@@ -14,7 +14,7 @@ use std::{
 use git2::Repository;
 
 /// All metadata required to retrieve necessary objects from a vendor.
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct VendorSource {
     /// The unique identifier for this particular vendor.
     pub name: String,
@@ -26,6 +26,8 @@ pub struct VendorSource {
     /// it is assumed that no prior merge has taken
     /// place and conflicts must be resolved manually.
     pub base: Option<String>,
+    /// Glob pattern(s) selecting which upstream files to vendor.
+    pub patterns: Vec<String>,
 }
 
 impl VendorSource {
@@ -38,6 +40,13 @@ impl VendorSource {
 
         if let Some(base) = &self.base {
             cfg.set_str(&format!("vendor.{}.base", &self.name), base)?;
+        }
+
+        // Remove existing pattern entries before writing the current set.
+        let pattern_key = format!("vendor.{}.pattern", &self.name);
+        let _ = cfg.remove_multivar(&pattern_key, ".*");
+        for pattern in &self.patterns {
+            cfg.set_multivar(&pattern_key, "^$", pattern)?;
         }
 
         Ok(())
@@ -55,11 +64,22 @@ impl VendorSource {
         let branch = cfg.get_string(&format!("vendor.{name}.branch")).ok();
         let base = cfg.get_string(&format!("vendor.{name}.base")).ok();
 
+        let mut patterns = Vec::new();
+        let pattern_entries = cfg.multivar(&format!("vendor.{name}.pattern"), None);
+        if let Ok(pattern_entries) = pattern_entries {
+            pattern_entries.for_each(|entry| {
+                if let Some(value) = entry.value() {
+                    patterns.push(value.to_string());
+                }
+            })?;
+        }
+
         Ok(Some(Self {
             name,
             url,
             branch,
             base,
+            patterns,
         }))
     }
 
@@ -127,13 +147,12 @@ pub trait Vendor {
     /// `Some(oid)` means there are unmerged upstream changes at that commit; `None` means up to date.
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error>;
 
-    /// Track vendor pattern(s) by writing gitattributes lines with the `vendor` attribute.
+    /// Track vendor pattern(s) by writing per-file gitattributes lines with the `vendor` attribute.
     fn track_vendor_pattern(
         &self,
         vendor: &VendorSource,
         globs: &[&str],
         path: &Path,
-        use_globs: bool,
     ) -> Result<(), git2::Error>;
 
     /// Fetch the upstream for the given vendor and advance `refs/vendor/$name`.
@@ -311,7 +330,6 @@ impl Vendor for Repository {
         vendor: &VendorSource,
         globs: &[&str],
         path: &Path,
-        use_globs: bool,
     ) -> Result<(), git2::Error> {
         let workdir = self
             .workdir()
@@ -352,34 +370,13 @@ impl Vendor for Repository {
 
             let vendor_attr = format!("vendor={}", vendor.name);
 
-            if use_globs {
-                // --glob: one gitattributes line per glob pattern.
-                let local_pattern = if glob.ends_with('/') {
-                    let dir = glob.trim_end_matches('/');
-                    path.join(dir).join("**")
-                } else {
-                    let glob_filename = Path::new(glob)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| glob.to_string());
-                    path.join(&glob_filename)
-                };
-
+            for file in &matched_files {
+                let local_pattern = path.join(file);
                 self.set_attr(
                     &local_pattern.to_string_lossy(),
                     &[&vendor_attr],
                     &gitattributes,
                 )?;
-            } else {
-                // Default: one gitattributes line per matched file.
-                for file in &matched_files {
-                    let local_pattern = path.join(file);
-                    self.set_attr(
-                        &local_pattern.to_string_lossy(),
-                        &[&vendor_attr],
-                        &gitattributes,
-                    )?;
-                }
             }
         }
 

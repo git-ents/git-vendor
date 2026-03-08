@@ -57,6 +57,7 @@ fn test_head_ref_simple() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/foo");
 }
@@ -68,6 +69,7 @@ fn test_head_ref_with_hyphens_and_underscores() {
         url: "https://example.com/lib.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib");
 }
@@ -83,6 +85,7 @@ fn test_tracking_branch_defaults_to_head() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "HEAD");
 }
@@ -94,6 +97,7 @@ fn test_tracking_branch_uses_explicit_branch() {
         url: "https://example.com/foo.git".into(),
         branch: Some("main".into()),
         base: None,
+        patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "main");
 }
@@ -105,6 +109,7 @@ fn test_tracking_branch_arbitrary_name() {
         url: "https://example.com/foo.git".into(),
         branch: Some("release/v2".into()),
         base: None,
+        patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "release/v2");
 }
@@ -121,6 +126,7 @@ fn test_to_config_url_only() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
 
@@ -141,6 +147,7 @@ fn test_to_config_with_branch() {
         url: "https://example.com/bar.git".into(),
         branch: Some("develop".into()),
         base: None,
+        patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
 
@@ -160,6 +167,7 @@ fn test_to_config_with_base() {
         url: "https://example.com/baz.git".into(),
         branch: None,
         base: Some("cafebabe".into()),
+        patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
 
@@ -179,6 +187,7 @@ fn test_to_config_all_fields() {
         url: "https://example.com/full.git".into(),
         branch: Some("stable".into()),
         base: Some("deadbeef".into()),
+        patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
 
@@ -294,6 +303,7 @@ fn test_config_roundtrip_full() {
         url: "https://example.com/roundtrip.git".into(),
         branch: Some("main".into()),
         base: Some("abc123def456".into()),
+        patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
 
@@ -305,6 +315,7 @@ fn test_config_roundtrip_full() {
     assert_eq!(restored.url, original.url);
     assert_eq!(restored.branch, original.branch);
     assert_eq!(restored.base, original.base);
+    assert_eq!(restored.patterns, original.patterns);
 }
 
 #[test]
@@ -315,6 +326,7 @@ fn test_config_roundtrip_optional_fields_absent() {
         url: "https://example.com/minimal.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
     original.to_config(&mut cfg).unwrap();
 
@@ -324,6 +336,33 @@ fn test_config_roundtrip_optional_fields_absent() {
     assert_eq!(restored.url, original.url);
     assert!(restored.branch.is_none());
     assert!(restored.base.is_none());
+    assert!(restored.patterns.is_empty());
+}
+
+#[test]
+fn test_config_roundtrip_patterns_update() {
+    let (_tmp, mut cfg) = empty_config();
+    let original = VendorSource {
+        name: "pat".into(),
+        url: "https://example.com/pat.git".into(),
+        branch: None,
+        base: None,
+        patterns: vec![".config/".into(), ".github/".into()],
+    };
+    original.to_config(&mut cfg).unwrap();
+
+    // Update patterns: remove one, add another.
+    let updated = VendorSource {
+        patterns: vec![".github/".into(), "src/".into()],
+        ..original.clone()
+    };
+    updated.to_config(&mut cfg).unwrap();
+
+    let restored = VendorSource::from_config(&cfg, "pat").unwrap().unwrap();
+    assert_eq!(
+        restored.patterns,
+        vec![".github/".to_string(), "src/".to_string()]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +562,7 @@ fn commit_tree_to_ref(
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_track_vendor_pattern_glob_root_glob_marks_all_files() {
+fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     // Upstream tree has two root-level files.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("a.txt", b"aaa"), ("b.txt", b"bbb")]);
@@ -534,29 +573,32 @@ fn test_track_vendor_pattern_glob_root_glob_marks_all_files() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
-    // set_attr resolves `.gitattributes` relative to CWD, so chdir into the repo.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.txt"], Path::new("lib"), true)
+        repo.track_vendor_pattern(&vendor, &["*.txt"], Path::new("lib"))
             .unwrap();
     });
 
-    // Should contain a single pattern line, not per-file entries.
     let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
-        content.contains("lib/*.txt") && content.contains("vendor=upstream"),
-        "expected lib/*.txt vendor=upstream in:\n{content}"
+        content.contains("lib/a.txt") && content.contains("vendor=upstream"),
+        "expected lib/a.txt vendor=upstream in:\n{content}"
     );
-    // No per-file splatting.
     assert!(
-        !content.contains("lib/a.txt") && !content.contains("lib/b.txt"),
-        "should not contain per-file entries:\n{content}"
+        content.contains("lib/b.txt") && content.contains("vendor=upstream"),
+        "expected lib/b.txt vendor=upstream in:\n{content}"
+    );
+    // No glob pattern.
+    assert!(
+        !content.contains("*.txt"),
+        "should not contain glob pattern:\n{content}"
     );
 }
 
 #[test]
-fn test_track_vendor_pattern_glob_selective_glob() {
+fn test_track_vendor_pattern_selective_glob() {
     // Upstream tree has a .rs and a .txt file – only .rs should be tracked.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(
@@ -570,17 +612,18 @@ fn test_track_vendor_pattern_glob_selective_glob() {
         url: "https://example.com/sel.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"), true)
+        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
             .unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join("src/.gitattributes")).unwrap();
     assert!(
-        content.contains("src/*.rs") && content.contains("vendor=sel"),
-        "expected src/*.rs vendor=sel in:\n{content}"
+        content.contains("src/main.rs") && content.contains("vendor=sel"),
+        "expected src/main.rs vendor=sel in:\n{content}"
     );
     // README.txt must NOT appear
     assert!(
@@ -590,7 +633,7 @@ fn test_track_vendor_pattern_glob_selective_glob() {
 }
 
 #[test]
-fn test_track_vendor_pattern_glob_nested_directory() {
+fn test_track_vendor_pattern_nested_directory() {
     // Upstream tree: sub/deep.txt
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("sub/deep.txt", b"deep")]);
@@ -601,20 +644,19 @@ fn test_track_vendor_pattern_glob_nested_directory() {
         url: "https://example.com/nested.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
-    // Use `sub/` glob which should expand to `vendor/sub/**`
+    // Use `sub/` glob — should expand to per-file entry for sub/deep.txt
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"), true)
+        repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"))
             .unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
-    // Directory glob `sub/` produces pattern `vendor/sub/**` reflecting
-    // the actual directory where vendored files reside.
     assert!(
-        content.contains("vendor/sub/**"),
-        "expected vendor/sub/** pattern in:\n{content}"
+        content.contains("vendor/sub/deep.txt"),
+        "expected vendor/sub/deep.txt in:\n{content}"
     );
     assert!(
         content.contains("vendor=nested"),
@@ -623,7 +665,7 @@ fn test_track_vendor_pattern_glob_nested_directory() {
 }
 
 #[test]
-fn test_track_vendor_pattern_glob_deep_pattern() {
+fn test_track_vendor_pattern_deep_pattern() {
     // Upstream tree: lib/foo.c
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("lib/foo.c", b"int main(){}")]);
@@ -634,23 +676,23 @@ fn test_track_vendor_pattern_glob_deep_pattern() {
         url: "https://example.com/pfx.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["**/*.c"], Path::new("third_party"), true)
+        repo.track_vendor_pattern(&vendor, &["**/*.c"], Path::new("third_party"))
             .unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join("third_party/.gitattributes")).unwrap();
-    // Pattern uses the glob's filename component, not individual files.
     assert!(
-        content.contains("third_party/*.c") && content.contains("vendor=pfx"),
-        "expected third_party/*.c vendor=pfx in:\n{content}"
+        content.contains("third_party/lib/foo.c") && content.contains("vendor=pfx"),
+        "expected third_party/lib/foo.c vendor=pfx in:\n{content}"
     );
 }
 
 #[test]
-fn test_track_vendor_pattern_glob_multiple_globs() {
+fn test_track_vendor_pattern_multiple_globs() {
     // Upstream tree has .rs, .toml, and .txt files – only .rs and .toml should be tracked.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(
@@ -668,21 +710,22 @@ fn test_track_vendor_pattern_glob_multiple_globs() {
         url: "https://example.com/multi.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs", "*.toml"], Path::new("lib"), true)
+        repo.track_vendor_pattern(&vendor, &["*.rs", "*.toml"], Path::new("lib"))
             .unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
-        content.contains("lib/*.rs") && content.contains("vendor=multi"),
-        "expected lib/*.rs vendor=multi in:\n{content}"
+        content.contains("lib/main.rs") && content.contains("vendor=multi"),
+        "expected lib/main.rs vendor=multi in:\n{content}"
     );
     assert!(
-        content.contains("lib/*.toml") && content.contains("vendor=multi"),
-        "expected lib/*.toml vendor=multi in:\n{content}"
+        content.contains("lib/Cargo.toml") && content.contains("vendor=multi"),
+        "expected lib/Cargo.toml vendor=multi in:\n{content}"
     );
     assert!(
         !content.contains("README.txt"),
@@ -701,10 +744,11 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
         url: "https://example.com/nomatch.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"), false)
+        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
             .unwrap();
     });
 
@@ -717,8 +761,8 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
 }
 
 #[test]
-fn test_track_vendor_pattern_default_expands_to_per_file() {
-    // Default (use_globs=false): each matched file gets its own gitattributes line.
+fn test_track_vendor_pattern_expands_to_per_file() {
+    // Each matched file gets its own gitattributes line.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(
         &repo,
@@ -735,10 +779,11 @@ fn test_track_vendor_pattern_default_expands_to_per_file() {
         url: "https://example.com/expand.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["**/*.txt"], Path::new("."), false)
+        repo.track_vendor_pattern(&vendor, &["**/*.txt"], Path::new("."))
             .unwrap();
     });
 
@@ -865,6 +910,7 @@ fn setup_merge_scenario(
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
+        patterns: vec![],
     };
 
     (repo, tmp, vendor)
@@ -966,6 +1012,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
+        patterns: vec![],
     };
 
     let idx = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1032,6 +1079,7 @@ fn test_merge_vendor_conflict() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
+        patterns: vec![],
     };
 
     let idx = repo.merge_vendor(&vendor, None, None).unwrap();

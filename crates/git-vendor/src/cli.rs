@@ -75,10 +75,6 @@ pub enum Command {
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Write glob patterns in .gitattributes instead of expanding to per-file entries.
-        #[arg(long)]
-        glob: bool,
-
         /// Strategy option for resolving conflicting regions during the merge.
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
         strategy_option: StrategyOption,
