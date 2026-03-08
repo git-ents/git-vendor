@@ -31,6 +31,7 @@ pub enum Command {
 
         /// A unique name for this vendor (used in config keys and ref names).
         /// Defaults to the basename of the URL, minus any `.git` suffix.
+        #[arg(short, long)]
         name: Option<String>,
 
         /// The upstream branch to track (defaults to HEAD).
@@ -42,6 +43,7 @@ pub enum Command {
         pattern: String,
 
         /// Local directory where vendored files are placed (defaults to current directory).
+        #[arg(long)]
         path: Option<PathBuf>,
     },
 
