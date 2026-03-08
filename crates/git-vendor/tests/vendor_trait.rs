@@ -266,6 +266,96 @@ fn test_vendor_config_absent_file_returns_empty_config() {
 }
 
 #[test]
+fn test_vendor_config_reads_git_dir_gitvendors() {
+    let tr = TestRepo::new();
+
+    // Write a $GIT_DIR/gitvendors (local level, repo-private).
+    let git_dir = tr.repo.path();
+    fs::write(
+        git_dir.join("gitvendors"),
+        r#"
+[vendor "local-lib"]
+    url = https://example.com/local-lib.git
+"#,
+    )
+    .unwrap();
+
+    let cfg = tr.repo.vendor_config().unwrap();
+    assert_eq!(
+        cfg.get_string("vendor.local-lib.url").unwrap(),
+        "https://example.com/local-lib.git"
+    );
+}
+
+#[test]
+fn test_vendor_config_index_overrides_git_dir() {
+    let tr = TestRepo::new();
+
+    // $GIT_DIR/gitvendors (local level).
+    let git_dir = tr.repo.path();
+    fs::write(
+        git_dir.join("gitvendors"),
+        r#"
+[vendor "lib"]
+    url = https://example.com/git-dir.git
+    branch = old
+"#,
+    )
+    .unwrap();
+
+    // $WORKDIR/.gitvendors (index level, highest priority).
+    tr.write_gitvendors(
+        r#"
+[vendor "lib"]
+    url = https://example.com/index.git
+"#,
+    );
+
+    let cfg = tr.repo.vendor_config().unwrap();
+    // Index value wins for url.
+    assert_eq!(
+        cfg.get_string("vendor.lib.url").unwrap(),
+        "https://example.com/index.git"
+    );
+}
+
+#[test]
+fn test_vendor_config_merges_git_dir_and_index() {
+    let tr = TestRepo::new();
+
+    // $GIT_DIR/gitvendors has one vendor.
+    let git_dir = tr.repo.path();
+    fs::write(
+        git_dir.join("gitvendors"),
+        r#"
+[vendor "private-lib"]
+    url = https://example.com/private-lib.git
+"#,
+    )
+    .unwrap();
+
+    // $WORKDIR/.gitvendors has a different vendor.
+    tr.write_gitvendors(
+        r#"
+[vendor "shared-lib"]
+    url = https://example.com/shared-lib.git
+"#,
+    );
+
+    let cfg = tr.repo.vendor_config().unwrap();
+    assert_eq!(
+        cfg.get_string("vendor.private-lib.url").unwrap(),
+        "https://example.com/private-lib.git",
+        "local (git-dir) vendor should be visible"
+    );
+    assert_eq!(
+        cfg.get_string("vendor.shared-lib.url").unwrap(),
+        "https://example.com/shared-lib.git",
+        "index (workdir) vendor should be visible"
+    );
+}
+
+#[test]
 fn test_vendor_config_fails_for_bare_repo() {
     let dir = TempDir::new().unwrap();
     let repo = Repository::init_bare(dir.path()).unwrap();

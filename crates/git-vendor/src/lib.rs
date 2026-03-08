@@ -107,7 +107,14 @@ fn vendors_from_config(cfg: &git2::Config) -> Result<Vec<VendorSource>, git2::Er
 
 /// A trait which provides methods for vendoring content across repository boundaries.
 pub trait Vendor {
-    /// Retrieve the top-level `.gitvendors` file as a `git2::Config` value.
+    /// Retrieve vendor configuration by merging three levels (lowest → highest
+    /// priority), analogous to `git config`:
+    ///
+    /// 1. **Global** – `~/.gitvendors`
+    /// 2. **Local**  – `$GIT_DIR/gitvendors`
+    /// 3. **Index**  – `$WORKDIR/.gitvendors` (tracked)
+    ///
+    /// Writes go to the highest-priority file present in the stack (index).
     fn vendor_config(&self) -> Result<git2::Config, git2::Error>;
 
     /// Retrieve all vendored files in a given tree.
@@ -179,7 +186,6 @@ pub trait Vendor {
     fn get_vendor_by_name(&self, name: &str) -> Result<Option<VendorSource>, git2::Error>;
 }
 
-/// Checks if `repo` is bare, and if so, raises an error.
 fn bail_if_bare(repo: &Repository) -> Result<(), git2::Error> {
     // TODO: add support for bare repositories
     // Support for bare repositories is currently blocked by the lack of
@@ -199,7 +205,30 @@ impl Vendor for Repository {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        let cfg = git2::Config::open(&workdir.join(".gitvendors"))?;
+
+        let mut cfg = git2::Config::new()?;
+
+        // Global ~/.gitvendors (lowest priority).
+        // Derive the home directory from libgit2's own global config path
+        // (~/.gitconfig) so we don't depend on env vars directly.
+        if let Some(global_path) = git2::Config::find_global()
+            .ok()
+            .and_then(|p| p.parent().map(|h| h.join(".gitvendors")))
+            .filter(|p| p.exists())
+        {
+            cfg.add_file(&global_path, git2::ConfigLevel::Global, false)?;
+        }
+
+        // Local $GIT_DIR/gitvendors (repo-private, not tracked).
+        let local_path = self.path().join("gitvendors");
+        if local_path.exists() {
+            cfg.add_file(&local_path, git2::ConfigLevel::Local, false)?;
+        }
+
+        // Index $WORKDIR/.gitvendors (tracked, highest priority).
+        let index_path = workdir.join(".gitvendors");
+        cfg.add_file(&index_path, git2::ConfigLevel::App, false)?;
+
         Ok(cfg)
     }
 
