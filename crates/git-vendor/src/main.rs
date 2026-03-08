@@ -58,6 +58,9 @@ fn resolve_merge_targets(
 fn print_merge_outcomes(outcomes: &[(String, exe::MergeOutcome)]) {
     for (vname, outcome) in outcomes {
         match outcome {
+            exe::MergeOutcome::UpToDate { .. } => {
+                eprintln!("'{}' is already up to date.", vname);
+            }
             exe::MergeOutcome::Clean { vendor } => {
                 eprintln!(
                     "'{}' merged cleanly (base {}).",
@@ -119,6 +122,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 file_favor,
             )?;
             match outcome {
+                exe::MergeOutcome::UpToDate { .. } => unreachable!("add never produces UpToDate"),
                 exe::MergeOutcome::Clean { vendor } => {
                     eprintln!(
                         "Added vendor '{}' (base {}).",

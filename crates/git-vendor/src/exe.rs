@@ -463,6 +463,12 @@ fn remove_vendor_attrs(workdir: &Path, name: &str) -> Result<(), Box<dyn std::er
 
 /// Result of a single vendor merge.
 pub enum MergeOutcome {
+    /// The vendor's `base` already matches the latest `refs/vendor/$name`.
+    /// Nothing was changed.
+    UpToDate {
+        /// The vendor source (unchanged).
+        vendor: VendorSource,
+    },
     /// The merge completed cleanly.  All changes are staged in the index and
     /// written to the working tree, but no commit has been created.
     Clean {
@@ -589,6 +595,15 @@ fn merge_vendor(
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
+
+    // Nothing to do when the base already matches the upstream tip.
+    if let Some(base) = &vendor.base {
+        if git2::Oid::from_str(base)? == vendor_commit.id() {
+            return Ok(MergeOutcome::UpToDate {
+                vendor: vendor.clone(),
+            });
+        }
+    }
 
     // Always update base in .gitvendors to the current upstream tip.
     let updated = VendorSource {
