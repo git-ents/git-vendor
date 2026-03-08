@@ -614,17 +614,19 @@ fn test_track_vendor_pattern_nested_directory() {
     });
 
     let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
-    // The filename component of `sub/` is `sub/` itself (no file_name()),
-    // so the pattern falls back to the full glob → `vendor/sub/`.
-    // After normalization the glob `sub/` → `sub/**`, which matches
-    // prefix `sub`.
+    // Directory glob `sub/` produces pattern `vendor/**` since matched
+    // files are flattened into the local directory.
     assert!(
-        content.contains("vendor-prefix=sub"),
-        "expected vendor-prefix=sub in:\n{content}"
+        content.contains("vendor/**"),
+        "expected vendor/** pattern in:\n{content}"
     );
     assert!(
         content.contains("vendor=nested"),
         "expected vendor=nested in:\n{content}"
+    );
+    assert!(
+        content.contains("vendor-prefix=sub"),
+        "expected vendor-prefix=sub in:\n{content}"
     );
 }
 

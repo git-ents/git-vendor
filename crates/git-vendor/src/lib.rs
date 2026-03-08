@@ -352,11 +352,18 @@ impl Vendor for Repository {
                 // For a glob like `**/*.c` matching prefix `lib`, the
                 // gitattributes pattern becomes `third_party/*.c` (the local
                 // path joined with the glob's filename component).
-                let glob_filename = Path::new(glob)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| glob.to_string());
-                let local_pattern = path.join(&glob_filename);
+                //
+                // Directory globs (`sub/`) expand to `path/**` since all files
+                // under that prefix are flattened into the local directory.
+                let local_pattern = if glob.ends_with('/') {
+                    path.join("**")
+                } else {
+                    let glob_filename = Path::new(glob)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| glob.to_string());
+                    path.join(&glob_filename)
+                };
                 let prefix_attr = format!("vendor-prefix={}", prefix.display());
 
                 self.set_attr(
