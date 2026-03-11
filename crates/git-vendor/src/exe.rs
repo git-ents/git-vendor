@@ -57,9 +57,57 @@ pub fn add(
         .workdir()
         .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
 
+    // Compute the CWD relative to the workdir so that running the command
+    // from a subdirectory (e.g. `cd ext/ && git vendor add ...`) behaves the
+    // same as passing `--path ext/` from the repo root.
+    //
+    // `Repository::open_from_env` / `open` canonicalises the workdir, so we
+    // do the same for CWD before stripping the prefix.
+    let cwd_rel: Option<std::path::PathBuf> = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+        .and_then(|cwd| {
+            let wd = workdir.canonicalize().ok()?;
+            cwd.strip_prefix(&wd).ok().map(|p| p.to_path_buf())
+        });
+
+    // Resolve the effective destination path:
+    //
+    // - If `--path` was given, join it onto the CWD offset so that both
+    //   `--path ext/` from the root and `cd ext/ && --path .` work correctly.
+    // - If `--path` was omitted, fall back to the CWD offset so that
+    //   `cd ext/ && git vendor add ...` places files under `ext/`.
+    //
+    // A resulting path of `""` / `"."` means "no remapping" and is treated
+    // as `None` by `apply_default_path`.
+    let resolved_path: Option<std::path::PathBuf> = match (path, &cwd_rel) {
+        // Explicit --path: join with the CWD offset so relative paths like
+        // "." are anchored to where the user is standing.
+        (Some(p), Some(rel)) => {
+            let joined = rel.join(p);
+            // Normalize away any "." components without touching the FS.
+            let s = joined.to_string_lossy().replace('\\', "/");
+            let s = s.trim_end_matches('/');
+            if s.is_empty() || s == "." {
+                None
+            } else {
+                Some(std::path::PathBuf::from(s))
+            }
+        }
+        (Some(p), None) => Some(p.to_path_buf()),
+        // No --path: use CWD offset (may be None when at the repo root).
+        (None, rel) => rel.as_ref().and_then(|r| {
+            if r == std::path::Path::new("") || r == std::path::Path::new(".") {
+                None
+            } else {
+                Some(r.clone())
+            }
+        }),
+    };
+
     // If `--path` was supplied, bake it as the default destination into any
     // patterns that don't already carry an explicit colon mapping.
-    let raw_patterns: Vec<String> = apply_default_path(patterns, path);
+    let raw_patterns: Vec<String> = apply_default_path(patterns, resolved_path.as_deref());
 
     let source = VendorSource {
         name: name.to_string(),
