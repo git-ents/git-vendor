@@ -7,6 +7,14 @@ edition = "2024"
 publish = true
 license = "MIT OR Apache-2.0"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
 [workspace.dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"

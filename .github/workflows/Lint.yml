@@ -152,10 +152,44 @@ jobs:
             echo "No crates are published yet — skipping semver checks entirely."
           fi
 
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+          cache: true
+      - name: Run clippy
+        run: cargo clippy --workspace --all-features -- -D warnings
+
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+          cache: true
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
   lint:
     name: Lint
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [pre-commit, validate-pr-title, cargo-deny, semver-checks]
+    needs:
+      [
+        pre-commit,
+        validate-pr-title,
+        cargo-deny,
+        semver-checks,
+        clippy,
+        rustfmt,
+      ]
     runs-on: ubuntu-latest
     steps:
       - run: |
