@@ -4,7 +4,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package]
 name = "git-vendor"
-version = "0.1.1"
+version = "0.2.0"
 description = "An in-source vendoring alternative to Git submodules and subtrees."
 repository = "https://github.com/git-ents/git-vendor"
 documentation = "https://docs.rs/git-vendor"
@@ -24,7 +24,7 @@ path = "src/main.rs"
 clap.workspace = true
 clap_mangen.workspace = true
 git2.workspace = true
-git-set-attr = { version = "0.1.1", path = "../git-set-attr" }
+git-set-attr = { version = "0.1.2", path = "../git-set-attr" }
 tempfile.workspace = true
 git-filter-tree = "0.3.1"
 globset.workspace = true

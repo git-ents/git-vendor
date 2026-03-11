@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/git-ents/git-vendor/compare/git-set-attr-v0.1.1...git-set-attr-v0.1.2) (2026-03-11)
+
+
+### Bug Fixes
+
+* Sort gitattributes entries by pattern for deterministic ordering ([8fbe454](https://github.com/git-ents/git-vendor/commit/8fbe45474f94aad87d7ad96315d9545578477981)), closes [#18](https://github.com/git-ents/git-vendor/issues/18)
+
 ## [0.1.1](https://github.com/git-ents/git-vendor/compare/git-set-attr-v0.1.0...git-set-attr-v0.1.1) (2026-03-08)
 
 
