@@ -35,8 +35,11 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 /// * `name`    – unique identifier stored in `.gitvendors`
 /// * `url`     – remote URL to vendor from
 /// * `branch`  – upstream branch to track (`None` → HEAD)
-/// * `patterns` – glob(s) selecting which upstream files to vendor (e.g. `["**"]`)
-/// * `path`     – local directory for vendored files; defaults to `"."`
+/// * `patterns` – raw pattern strings, optionally with colon mapping syntax
+///   (e.g. `["src/**:ext/"]`).  See [`PatternMapping`].
+/// * `path`    – default destination prefix applied to patterns that have no
+///   explicit colon mapping.  Written into `.gitvendors` as the
+///   colon syntax so future merges use the same placement.
 pub fn add(
     repo: &Repository,
     name: &str,
@@ -54,12 +57,16 @@ pub fn add(
         .workdir()
         .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
 
+    // If `--path` was supplied, bake it as the default destination into any
+    // patterns that don't already carry an explicit colon mapping.
+    let raw_patterns: Vec<String> = apply_default_path(patterns, path);
+
     let source = VendorSource {
         name: name.to_string(),
         url: url.to_string(),
         branch: branch.map(String::from),
         base: None,
-        patterns: patterns.iter().map(|s| s.to_string()).collect(),
+        patterns: raw_patterns.clone(),
     };
 
     // Persist to .gitvendors config (create the file if it doesn't exist yet).
@@ -73,9 +80,11 @@ pub fn add(
     // Fetch upstream.
     repo.fetch_vendor(&source, None)?;
 
-    // Track the requested pattern(s).
-    let path = path.unwrap_or_else(|| Path::new("."));
-    repo.track_vendor_pattern(&source, patterns, path)?;
+    // Track the stored patterns in .gitattributes.  The raw_patterns already
+    // carry any colon destination from --path (baked in above), so we pass
+    // Path::new(".") to signal "no additional prefix".
+    let raw_pattern_refs: Vec<&str> = raw_patterns.iter().map(String::as_str).collect();
+    repo.track_vendor_pattern(&source, &raw_pattern_refs, Path::new("."))?;
 
     // Update base in .gitvendors to the current upstream tip.
     let vendor_ref = repo.find_reference(&source.head_ref())?;
@@ -85,16 +94,17 @@ pub fn add(
         url: source.url.clone(),
         branch: source.branch.clone(),
         base: Some(vendor_commit.id().to_string()),
-        patterns: source.patterns.clone(),
+        patterns: raw_patterns.clone(),
     };
     {
         let mut cfg = repo.vendor_config()?;
         updated.to_config(&mut cfg)?;
     }
 
-    // Perform the initial one-time merge using the glob pattern(s) directly,
+    // Perform the initial one-time merge using the stored patterns directly,
     // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
-    let merged_index = repo.add_vendor(&source, patterns, path, file_favor)?;
+    // raw_patterns already carry any colon destination, so pass Path::new(".").
+    let merged_index = repo.add_vendor(&source, &raw_pattern_refs, Path::new("."), file_favor)?;
 
     // Write merged result (including conflict markers) to the working tree
     // and stage clean entries.
@@ -103,17 +113,49 @@ pub fn add(
     // Stage metadata files that checkout_and_stage does not cover.
     let mut repo_index = repo.index()?;
     repo_index.add_path(Path::new(".gitvendors"))?;
-    let attr_path = if path == Path::new(".") {
-        std::path::PathBuf::from(".gitattributes")
-    } else {
-        path.join(".gitattributes")
-    };
-    if workdir.join(&attr_path).exists() {
-        repo_index.add_path(&attr_path)?;
+    if workdir.join(".gitattributes").exists() {
+        repo_index.add_path(Path::new(".gitattributes"))?;
     }
     repo_index.write()?;
 
     Ok(outcome)
+}
+
+/// Apply `path` as the default destination prefix to any raw pattern strings
+/// that do not already carry an explicit colon mapping.
+///
+/// Patterns that already contain a `:` are left unchanged.
+pub fn apply_default_path_pub(patterns: &[&str], path: Option<&Path>) -> Vec<String> {
+    apply_default_path(patterns, path)
+}
+
+fn apply_default_path(patterns: &[&str], path: Option<&Path>) -> Vec<String> {
+    let Some(dest_path) = path else {
+        return patterns.iter().map(|s| s.to_string()).collect();
+    };
+
+    // Normalise to a forward-slash string ending with '/'.
+    let dest = {
+        let s = dest_path.to_string_lossy().replace('\\', "/");
+        let s = s.trim_end_matches('/');
+        if s.is_empty() || s == "." {
+            // Path "." means "no remapping" – same as omitting --path.
+            return patterns.iter().map(|s| s.to_string()).collect();
+        }
+        format!("{}/", s)
+    };
+
+    patterns
+        .iter()
+        .map(|raw| {
+            if raw.contains(':') {
+                // Already has an explicit destination – leave it alone.
+                raw.to_string()
+            } else {
+                format!("{}:{}", raw, dest)
+            }
+        })
+        .collect()
 }
 
 /// Add pattern(s) to an existing vendor's configuration in `.gitvendors`.

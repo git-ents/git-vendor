@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tempfile::{NamedTempFile, TempPath};
 
-use super::{Vendor, VendorSource};
+use super::{PatternMapping, Vendor, VendorSource};
 
 /// Global lock so that tests that change the process-wide CWD don't race.
 static CWD_LOCK: Mutex<()> = Mutex::new(());
@@ -576,12 +576,15 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
         patterns: vec![],
     };
 
+    // Pattern "*.txt:lib/" maps upstream "a.txt" → "lib/a.txt".
+    // Passing path="." so the colon syntax in the glob is honoured.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.txt"], Path::new("lib"))
+        repo.track_vendor_pattern(&vendor, &["*.txt:lib/"], Path::new("."))
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
+    // Attrs are written to the root .gitattributes.
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert!(
         content.contains("lib/a.txt") && content.contains("vendor=upstream"),
         "expected lib/a.txt vendor=upstream in:\n{content}"
@@ -615,12 +618,13 @@ fn test_track_vendor_pattern_selective_glob() {
         patterns: vec![],
     };
 
+    // Pattern "*.rs:src/" maps upstream "main.rs" → "src/main.rs".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
+        repo.track_vendor_pattern(&vendor, &["*.rs:src/"], Path::new("."))
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join("src/.gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert!(
         content.contains("src/main.rs") && content.contains("vendor=sel"),
         "expected src/main.rs vendor=sel in:\n{content}"
@@ -647,16 +651,17 @@ fn test_track_vendor_pattern_nested_directory() {
         patterns: vec![],
     };
 
-    // Use `sub/` glob — should expand to per-file entry for sub/deep.txt
+    // Pattern "sub/:vendor/" strips "sub/" and prepends "vendor/".
+    // upstream "sub/deep.txt" → "vendor/deep.txt".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["sub/"], Path::new("vendor"))
+        repo.track_vendor_pattern(&vendor, &["sub/:vendor/"], Path::new("."))
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert!(
-        content.contains("vendor/sub/deep.txt"),
-        "expected vendor/sub/deep.txt in:\n{content}"
+        content.contains("vendor/deep.txt"),
+        "expected vendor/deep.txt in:\n{content}"
     );
     assert!(
         content.contains("vendor=nested"),
@@ -679,12 +684,14 @@ fn test_track_vendor_pattern_deep_pattern() {
         patterns: vec![],
     };
 
+    // Pattern "**/*.c:third_party/" – no prefix stripped (** has empty literal prefix),
+    // destination "third_party/" prepended. upstream "lib/foo.c" → "third_party/lib/foo.c".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["**/*.c"], Path::new("third_party"))
+        repo.track_vendor_pattern(&vendor, &["**/*.c:third_party/"], Path::new("."))
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join("third_party/.gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert!(
         content.contains("third_party/lib/foo.c") && content.contains("vendor=pfx"),
         "expected third_party/lib/foo.c vendor=pfx in:\n{content}"
@@ -713,12 +720,13 @@ fn test_track_vendor_pattern_multiple_globs() {
         patterns: vec![],
     };
 
+    // Two patterns, both mapping to "lib/".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs", "*.toml"], Path::new("lib"))
+        repo.track_vendor_pattern(&vendor, &["*.rs:lib/", "*.toml:lib/"], Path::new("."))
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert!(
         content.contains("lib/main.rs") && content.contains("vendor=multi"),
         "expected lib/main.rs vendor=multi in:\n{content}"
@@ -747,8 +755,9 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
         patterns: vec![],
     };
 
+    // No upstream files match "*.rs" so nothing should be written.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs"], Path::new("src"))
+        repo.track_vendor_pattern(&vendor, &["*.rs:src/"], Path::new("."))
             .unwrap();
     });
 
@@ -782,6 +791,7 @@ fn test_track_vendor_pattern_expands_to_per_file() {
         patterns: vec![],
     };
 
+    // No colon → no remapping, files keep their upstream paths.
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor, &["**/*.txt"], Path::new("."))
             .unwrap();
@@ -1289,14 +1299,16 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("lib"))
+        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("."))
             .unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
+    // refresh_vendor_attrs now always writes to the root .gitattributes.
+    // The merged index contains "sub/file.txt" so that path appears in the attrs.
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert!(
-        content.contains("lib/sub/file.txt"),
-        "expected forward-slash path lib/sub/file.txt in:\n{content}"
+        content.contains("sub/file.txt"),
+        "expected forward-slash path sub/file.txt in:\n{content}"
     );
     assert!(
         !content.contains('\\'),
@@ -1346,6 +1358,8 @@ fn test_add_vendor_nested_paths_match_correctly() {
     };
 
     with_cwd(tmp.path(), || {
+        // Pattern "sub/" without a destination: matches files under sub/, keeps their
+        // full upstream paths (sub/overlap.c stays at sub/overlap.c).
         let index = repo
             .add_vendor(&vendor, &["sub/"], Path::new("."), None)
             .unwrap();
@@ -1357,8 +1371,362 @@ fn test_add_vendor_nested_paths_match_correctly() {
             .map(|e| String::from_utf8_lossy(&e.path).to_string())
             .collect();
         assert!(
-            paths.contains(&"sub/overlap.c".to_string()),
+            paths.iter().any(|p| p == "sub/overlap.c"),
             "nested file sub/overlap.c should be in merge index, got: {paths:?}"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// PatternMapping unit tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_pattern_mapping_parse_no_colon() {
+    let m = PatternMapping::parse("src/**");
+    assert_eq!(m.glob, "src/**");
+    assert_eq!(m.destination, None);
+}
+
+#[test]
+fn test_pattern_mapping_parse_with_destination() {
+    let m = PatternMapping::parse("src/**:ext/");
+    assert_eq!(m.glob, "src/**");
+    assert_eq!(m.destination.as_deref(), Some("ext/"));
+}
+
+#[test]
+fn test_pattern_mapping_parse_directory_shorthand() {
+    let m = PatternMapping::parse("src/:ext/");
+    assert_eq!(m.glob, "src/");
+    assert_eq!(m.destination.as_deref(), Some("ext/"));
+}
+
+#[test]
+fn test_pattern_mapping_to_raw_roundtrip() {
+    let cases = ["src/**", "src/**:ext/", "docs/**:docs/upstream/", "**"];
+    for raw in &cases {
+        let m = PatternMapping::parse(raw);
+        assert_eq!(m.to_raw(), *raw, "round-trip failed for {raw}");
+    }
+}
+
+#[test]
+fn test_literal_prefix_with_glob_star() {
+    assert_eq!(PatternMapping::parse("src/**").literal_prefix(), "src/");
+    assert_eq!(
+        PatternMapping::parse("src/**/*.rs").literal_prefix(),
+        "src/"
+    );
+    assert_eq!(PatternMapping::parse("**").literal_prefix(), "");
+    assert_eq!(PatternMapping::parse("**/*.rs").literal_prefix(), "");
+    assert_eq!(PatternMapping::parse("*.rs").literal_prefix(), "");
+}
+
+#[test]
+fn test_literal_prefix_directory_shorthand() {
+    // Trailing-slash pattern: the whole string is the literal prefix.
+    assert_eq!(PatternMapping::parse("src/").literal_prefix(), "src/");
+    assert_eq!(PatternMapping::parse("docs/").literal_prefix(), "docs/");
+}
+
+#[test]
+fn test_local_path_no_destination_preserves_upstream() {
+    let m = PatternMapping::parse("src/**");
+    assert_eq!(
+        m.local_path("src/lib/foo.rs"),
+        Some("src/lib/foo.rs".into())
+    );
+    assert_eq!(m.local_path("src/mod.rs"), Some("src/mod.rs".into()));
+}
+
+#[test]
+fn test_local_path_with_destination_strips_prefix() {
+    // "src/**:ext/" → strip "src/", prepend "ext/"
+    let m = PatternMapping::parse("src/**:ext/");
+    assert_eq!(
+        m.local_path("src/lib/foo.rs"),
+        Some("ext/lib/foo.rs".into())
+    );
+    assert_eq!(m.local_path("src/mod.rs"), Some("ext/mod.rs".into()));
+}
+
+#[test]
+fn test_local_path_directory_shorthand_with_destination() {
+    // "src/:ext/" → strip "src/", prepend "ext/"
+    let m = PatternMapping::parse("src/:ext/");
+    assert_eq!(
+        m.local_path("src/lib/foo.rs"),
+        Some("ext/lib/foo.rs".into())
+    );
+}
+
+#[test]
+fn test_local_path_glob_star_with_destination() {
+    // "**/*.rs:ext/" → literal prefix is "" (starts with *), no stripping,
+    // prepend "ext/" → upstream path is preserved under ext/.
+    let m = PatternMapping::parse("**/*.rs:ext/");
+    assert_eq!(
+        m.local_path("src/lib/foo.rs"),
+        Some("ext/src/lib/foo.rs".into())
+    );
+    // When the literal prefix is empty, local_path returns full upstream path + dest prefix.
+    let m2 = PatternMapping::parse("src/**/*.rs:ext/");
+    // "src/**/*.rs" has literal prefix "src/", strip it:
+    // "src/lib/foo.rs" → "lib/foo.rs" → "ext/lib/foo.rs"
+    assert_eq!(
+        m2.local_path("src/lib/foo.rs"),
+        Some("ext/lib/foo.rs".into())
+    );
+}
+
+#[test]
+fn test_local_path_prefix_mismatch_returns_none() {
+    let m = PatternMapping::parse("src/:ext/");
+    // "other/foo.rs" doesn't start with "src/"
+    assert_eq!(m.local_path("other/foo.rs"), None);
+}
+
+#[test]
+fn test_local_path_docs_to_upstream() {
+    let m = PatternMapping::parse("docs/**:docs/upstream/");
+    assert_eq!(
+        m.local_path("docs/guide.md"),
+        Some("docs/upstream/guide.md".into())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// apply_default_path tests (via exe::add_default_path)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_apply_default_path_no_path() {
+    use crate::exe::apply_default_path_pub;
+    let patterns = ["src/**", "docs/**"];
+    let result = apply_default_path_pub(&patterns, None);
+    assert_eq!(result, vec!["src/**", "docs/**"]);
+}
+
+#[test]
+fn test_apply_default_path_with_path() {
+    use crate::exe::apply_default_path_pub;
+    let patterns = ["src/**", "docs/**"];
+    let result = apply_default_path_pub(&patterns, Some(std::path::Path::new("ext")));
+    assert_eq!(result, vec!["src/**:ext/", "docs/**:ext/"]);
+}
+
+#[test]
+fn test_apply_default_path_does_not_override_explicit_mapping() {
+    use crate::exe::apply_default_path_pub;
+    // Pattern already has an explicit destination → left alone.
+    let patterns = ["src/**:custom/", "docs/**"];
+    let result = apply_default_path_pub(&patterns, Some(std::path::Path::new("ext")));
+    assert_eq!(result, vec!["src/**:custom/", "docs/**:ext/"]);
+}
+
+#[test]
+fn test_apply_default_path_dot_path_is_noop() {
+    use crate::exe::apply_default_path_pub;
+    // Path "." means "same as omitting --path".
+    let patterns = ["src/**"];
+    let result = apply_default_path_pub(&patterns, Some(std::path::Path::new(".")));
+    assert_eq!(result, vec!["src/**"]);
+}
+
+// ---------------------------------------------------------------------------
+// merge_vendor – path-mapped integration tests
+// ---------------------------------------------------------------------------
+
+/// Verify that merge_vendor places new upstream files at the remapped local
+/// path determined by the pattern's colon mapping.
+#[test]
+fn test_merge_vendor_new_file_at_mapped_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    let vendor_name = "mapped";
+
+    // Local has one vendored file at the remapped location: "ext/a.rs"
+    // (upstream was "src/a.rs", pattern "src/**:ext/").
+    let attrs = "ext/a.rs vendor=mapped\n";
+    std::fs::write(tmp.path().join(".gitattributes"), attrs).unwrap();
+    std::fs::create_dir_all(tmp.path().join("ext")).unwrap();
+    std::fs::write(tmp.path().join("ext/a.rs"), "fn a(){}\n").unwrap();
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "initial",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    // Upstream adds "src/b.rs" alongside "src/a.rs".
+    let upstream_tree = build_tree(
+        &repo,
+        &[("src/a.rs", b"fn a(){}\n"), ("src/b.rs", b"fn b(){}\n")],
+    );
+    let base_tree = build_tree(&repo, &[("src/a.rs", b"fn a(){}\n")]);
+    let base_commit = repo
+        .commit(None, &test_sig(), &test_sig(), "base", &base_tree, &[])
+        .unwrap();
+    commit_tree_to_ref(
+        &repo,
+        &format!("refs/vendor/{vendor_name}"),
+        &upstream_tree,
+        "upstream adds b.rs",
+    );
+
+    // Pattern "src/**:ext/" – upstream files under src/ land under ext/.
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        branch: None,
+        base: Some(base_commit.to_string()),
+        patterns: vec!["src/**:ext/".to_string()],
+    };
+
+    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
+    assert!(
+        !idx.has_conflicts(),
+        "adding a new file should merge cleanly"
+    );
+
+    let paths: Vec<String> = idx
+        .iter()
+        .filter(|e| (e.flags >> 12) & 0x3 == 0)
+        .map(|e| String::from_utf8_lossy(&e.path).to_string())
+        .collect();
+
+    assert!(
+        paths.contains(&"ext/b.rs".to_string()),
+        "new upstream src/b.rs should appear at ext/b.rs, got: {paths:?}"
+    );
+    assert!(
+        paths.contains(&"ext/a.rs".to_string()),
+        "existing ext/a.rs should still be present, got: {paths:?}"
+    );
+    // The raw upstream path must NOT appear.
+    assert!(
+        !paths.contains(&"src/b.rs".to_string()),
+        "raw upstream path src/b.rs must not appear in merge index, got: {paths:?}"
+    );
+}
+
+/// Verify that multi-pattern vendors (mixed mapped and unmapped) place files
+/// at the correct local paths.
+#[test]
+fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
+    let (repo, tmp) = init_repo_with_gitattributes("");
+
+    // Upstream tree: src/main.rs and docs/guide.md
+    let upstream_tree = build_tree(
+        &repo,
+        &[
+            ("src/main.rs", b"fn main(){}"),
+            ("docs/guide.md", b"# Guide"),
+        ],
+    );
+    commit_tree_to_ref(&repo, "refs/vendor/mixed", &upstream_tree, "vendor tip");
+
+    let vendor = VendorSource {
+        name: "mixed".into(),
+        url: "https://example.com/mixed.git".into(),
+        branch: None,
+        base: None,
+        patterns: vec![],
+    };
+
+    with_cwd(tmp.path(), || {
+        // "src/**:ext/src/" remaps: src/main.rs → ext/src/main.rs
+        // "docs/**" (no mapping): docs/guide.md → docs/guide.md
+        let index = repo
+            .add_vendor(
+                &vendor,
+                &["src/**:ext/src/", "docs/**"],
+                Path::new("."),
+                None,
+            )
+            .unwrap();
+        let paths: Vec<String> = index
+            .iter()
+            .filter(|e| (e.flags >> 12) & 0x3 == 0)
+            .map(|e| String::from_utf8_lossy(&e.path).to_string())
+            .collect();
+        assert!(
+            paths.contains(&"ext/src/main.rs".to_string()),
+            "src/main.rs should be remapped to ext/src/main.rs, got: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"docs/guide.md".to_string()),
+            "docs/guide.md should keep its upstream path, got: {paths:?}"
+        );
+        // Raw upstream path must not appear.
+        assert!(
+            !paths.contains(&"src/main.rs".to_string()),
+            "raw src/main.rs must not appear in merge index, got: {paths:?}"
+        );
+    });
+}
+
+/// Verify that glob filtering excludes non-matching files even with a mapping.
+#[test]
+fn test_add_vendor_glob_filtering_with_mapping() {
+    let (repo, tmp) = init_repo_with_gitattributes("");
+
+    // Upstream tree: src/lib.rs (Rust) and src/README.txt (text) and other/data.bin
+    let upstream_tree = build_tree(
+        &repo,
+        &[
+            ("src/lib.rs", b"pub fn lib(){}"),
+            ("src/README.txt", b"hello"),
+            ("other/data.bin", b"\x00\x01\x02"),
+        ],
+    );
+    commit_tree_to_ref(&repo, "refs/vendor/filter", &upstream_tree, "vendor tip");
+
+    let vendor = VendorSource {
+        name: "filter".into(),
+        url: "https://example.com/filter.git".into(),
+        branch: None,
+        base: None,
+        patterns: vec![],
+    };
+
+    with_cwd(tmp.path(), || {
+        // "src/**/*.rs:ext/" – literal prefix is "src/", so "src/lib.rs" → "lib.rs",
+        // then prepend "ext/" → "ext/lib.rs".
+        let index = repo
+            .add_vendor(&vendor, &["src/**/*.rs:ext/"], Path::new("."), None)
+            .unwrap();
+        let paths: Vec<String> = index
+            .iter()
+            .filter(|e| (e.flags >> 12) & 0x3 == 0)
+            .map(|e| String::from_utf8_lossy(&e.path).to_string())
+            .collect();
+        assert!(
+            paths.contains(&"ext/lib.rs".to_string()),
+            "src/lib.rs should be remapped to ext/lib.rs (literal prefix 'src/' stripped), got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.ends_with("README.txt")),
+            "README.txt should be excluded, got: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.ends_with("data.bin")),
+            "data.bin should be excluded, got: {paths:?}"
         );
     });
 }

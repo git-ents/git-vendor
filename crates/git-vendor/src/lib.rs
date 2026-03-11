@@ -22,6 +22,116 @@ fn to_git_path(p: &Path) -> String {
     s.strip_prefix("./").unwrap_or(&s).to_string()
 }
 
+/// A parsed pattern entry with an optional destination prefix.
+///
+/// The raw config value uses the syntax `<glob>` or `<glob>:<destination>`.
+/// For example:
+/// - `src/**` – match `src/**`, no remapping (files keep their upstream path)
+/// - `src/**:ext/` – match `src/**`, strip the literal prefix `src/`, then
+///   prepend `ext/` to get the local path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatternMapping {
+    /// The glob string (left of the colon, or the whole value when no colon).
+    pub glob: String,
+    /// The local destination prefix (right of the colon), if present.
+    pub destination: Option<String>,
+}
+
+impl PatternMapping {
+    /// Parse a raw pattern string, splitting on the first `:` only.
+    pub fn parse(raw: &str) -> Self {
+        match raw.split_once(':') {
+            Some((glob, dest)) => PatternMapping {
+                glob: glob.to_string(),
+                destination: if dest.is_empty() {
+                    None
+                } else {
+                    Some(dest.to_string())
+                },
+            },
+            None => PatternMapping {
+                glob: raw.to_string(),
+                destination: None,
+            },
+        }
+    }
+
+    /// Serialize back to the raw config string.
+    pub fn to_raw(&self) -> String {
+        match &self.destination {
+            Some(dest) => format!("{}:{}", self.glob, dest),
+            None => self.glob.clone(),
+        }
+    }
+
+    /// Extract the literal (non-glob) leading path component(s) from the glob.
+    ///
+    /// "Literal prefix" is everything before the first glob character (`*`, `?`,
+    /// `[`).  For `src/**/*.rs` this returns `src/`.  For `**` it returns `""`.
+    pub fn literal_prefix(&self) -> &str {
+        let glob = self.glob.as_str();
+        // Normalize trailing '/' patterns (e.g. "src/") – the literal prefix
+        // is the whole string in that case.
+        let first_glob = glob.find(['*', '?', '[']);
+        match first_glob {
+            Some(0) => "",
+            Some(idx) => &glob[..idx],
+            None => {
+                // No glob characters at all; the whole thing is a literal prefix
+                // (directory shorthand).
+                if glob.ends_with('/') {
+                    glob
+                } else {
+                    ""
+                }
+            }
+        }
+    }
+
+    /// Compute the local path for an upstream file that matched this pattern.
+    ///
+    /// 1. Strip the literal prefix from `upstream_path`.
+    /// 2. If a `destination` is set, prepend it.
+    ///
+    /// Returns `None` if the upstream path doesn't start with the literal
+    /// prefix (which shouldn't happen when the glob matched, but we guard
+    /// defensively).
+    pub fn local_path(&self, upstream_path: &str) -> Option<String> {
+        let prefix = self.literal_prefix();
+        let stripped = if prefix.is_empty() {
+            upstream_path
+        } else {
+            upstream_path.strip_prefix(prefix)?
+        };
+        Some(match &self.destination {
+            Some(dest) => {
+                // Ensure dest ends with '/' when non-empty so paths join correctly.
+                let dest = dest.trim_end_matches('/');
+                if dest.is_empty() {
+                    stripped.to_string()
+                } else {
+                    format!("{}/{}", dest, stripped)
+                }
+            }
+            None => upstream_path.to_string(),
+        })
+    }
+}
+
+/// Parse a slice of raw pattern strings into [`PatternMapping`]s.
+pub fn parse_patterns(raws: &[impl AsRef<str>]) -> Vec<PatternMapping> {
+    raws.iter().map(|r| PatternMapping::parse(r.as_ref())).collect()
+}
+
+/// Build a [`globset::GlobSet`] from a slice of [`PatternMapping`]s, using
+/// only the glob side (left of `:`).
+fn build_glob_matcher_from_mappings(
+    mappings: &[PatternMapping],
+) -> Result<globset::GlobSet, git2::Error> {
+    let globs: Vec<&str> = mappings.iter().map(|m| m.glob.as_str()).collect();
+    build_glob_matcher(&globs)
+}
+
 /// Build a [`globset::GlobSet`] from a slice of pattern strings, normalizing
 /// trailing-`/` directory shorthands to `dir/**`.
 fn build_glob_matcher(patterns: &[impl AsRef<str>]) -> Result<globset::GlobSet, git2::Error> {
@@ -40,6 +150,140 @@ fn build_glob_matcher(patterns: &[impl AsRef<str>]) -> Result<globset::GlobSet, 
     builder
         .build()
         .map_err(|e| git2::Error::from_str(&e.to_string()))
+}
+
+/// Convert a `(globs, path)` pair — the legacy API shape — into a
+/// `Vec<PatternMapping>`.
+///
+/// Each glob is parsed with [`PatternMapping::parse`].  If a glob already
+/// carries an explicit colon destination, that destination is used as-is.
+/// Otherwise `path` is applied as the destination prefix (unless `path` is
+/// `"."` or empty, which means "no remapping").
+fn globs_and_path_to_mappings(globs: &[&str], path: &Path) -> Vec<PatternMapping> {
+    // Determine the normalised destination string from `path`.
+    let dest: Option<String> = {
+        let s = path.to_string_lossy().replace('\\', "/");
+        let s = s.trim_end_matches('/');
+        if s.is_empty() || s == "." {
+            None
+        } else {
+            Some(format!("{}/", s))
+        }
+    };
+
+    globs
+        .iter()
+        .map(|raw| {
+            let m = PatternMapping::parse(raw);
+            if m.destination.is_some() {
+                // Already has an explicit colon mapping – keep it.
+                m
+            } else if let Some(ref d) = dest {
+                // Apply `path` as the destination.
+                PatternMapping {
+                    glob: m.glob,
+                    destination: Some(d.clone()),
+                }
+            } else {
+                m
+            }
+        })
+        .collect()
+}
+
+/// Find the first [`PatternMapping`] from `mappings` whose glob matches
+/// `upstream_path`, and return the computed local path.
+///
+/// Returns `None` if no pattern matches.
+fn apply_pattern_mappings(mappings: &[PatternMapping], upstream_path: &str) -> Option<String> {
+    for mapping in mappings {
+        let glob = if mapping.glob.ends_with('/') {
+            format!("{}**", mapping.glob)
+        } else {
+            mapping.glob.clone()
+        };
+        let g = globset::Glob::new(&glob).ok()?;
+        let matcher = globset::GlobSetBuilder::new().add_then_build(g).ok()?;
+        if matcher.is_match(upstream_path) {
+            return mapping.local_path(upstream_path);
+        }
+    }
+    None
+}
+
+/// Extension trait for [`globset::GlobSetBuilder`] to support chaining.
+trait GlobSetBuilderExt {
+    fn add_then_build(self, glob: globset::Glob) -> Result<globset::GlobSet, globset::Error>;
+}
+
+impl GlobSetBuilderExt for globset::GlobSetBuilder {
+    fn add_then_build(mut self, glob: globset::Glob) -> Result<globset::GlobSet, globset::Error> {
+        self.add(glob);
+        self.build()
+    }
+}
+
+/// Build a new git tree in `repo` containing only the upstream files that
+/// match one of `mappings`, placed at their **local** (remapped) paths.
+///
+/// For each blob in `upstream_tree`, the first matching [`PatternMapping`] is
+/// used to compute the local path.  Files that match no pattern are skipped.
+///
+/// The resulting tree has entries keyed by local path, ready to be used as
+/// "theirs" in a merge against HEAD.
+fn remap_upstream_tree<'a>(
+    repo: &'a git2::Repository,
+    upstream_tree: &git2::Tree<'_>,
+    mappings: &[PatternMapping],
+) -> Result<git2::Tree<'a>, git2::Error> {
+    // Collect (local_path, blob_oid, mode) pairs.
+    let mut entries: Vec<(String, git2::Oid, u32)> = Vec::new();
+
+    upstream_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        if entry.kind() != Some(git2::ObjectType::Blob) {
+            return git2::TreeWalkResult::Ok;
+        }
+        let upstream_path = format!("{}{}", dir, entry.name().unwrap_or(""));
+        if let Some(local_path) = apply_pattern_mappings(mappings, &upstream_path) {
+            entries.push((local_path, entry.id(), entry.filemode() as u32));
+        }
+        git2::TreeWalkResult::Ok
+    })?;
+
+    build_tree_from_entries(repo, &entries)
+}
+
+/// Build a git tree from a flat list of `(path, blob_oid, mode)` entries,
+/// creating nested subtrees as needed.
+fn build_tree_from_entries<'a>(
+    repo: &'a git2::Repository,
+    entries: &[(String, git2::Oid, u32)],
+) -> Result<git2::Tree<'a>, git2::Error> {
+    // Group entries by their top-level component, then recurse.
+    // Entries at the root are inserted directly; others go into subtrees.
+    let mut root_files: Vec<(&str, git2::Oid, u32)> = Vec::new();
+    let mut subdirs: std::collections::BTreeMap<&str, Vec<(String, git2::Oid, u32)>> =
+        std::collections::BTreeMap::new();
+
+    for (path, oid, mode) in entries {
+        if let Some((dir, rest)) = path.split_once('/') {
+            subdirs.entry(dir).or_default().push((rest.to_string(), *oid, *mode));
+        } else {
+            root_files.push((path.as_str(), *oid, *mode));
+        }
+    }
+
+    let mut builder = repo.treebuilder(None)?;
+    for (name, oid, mode) in root_files {
+        builder.insert(name, oid, mode as i32)?;
+    }
+    for (dir, sub_entries) in &subdirs {
+        let subtree = build_tree_from_entries(repo, sub_entries)?;
+        builder.insert(dir, subtree.id(), 0o040000)?;
+    }
+
+    let oid = builder.write()?;
+    repo.find_tree(oid)
 }
 
 /// All metadata required to retrieve necessary objects from a vendor.
@@ -177,6 +421,15 @@ pub trait Vendor {
     fn check_vendors(&self) -> Result<HashMap<VendorSource, Option<git2::Oid>>, git2::Error>;
 
     /// Track vendor pattern(s) by writing per-file gitattributes lines with the `vendor` attribute.
+    ///
+    /// `globs` selects which upstream files to track.  `path` is the local
+    /// directory under which the vendored files will live; it acts as the
+    /// destination prefix for each glob.  Use `Path::new(".")` when the files
+    /// are placed at the repository root.
+    ///
+    /// Patterns that already carry an explicit colon mapping (e.g. `src/**:ext/`)
+    /// are stored as-is in [`VendorSource::patterns`] and are interpreted by
+    /// the internal [`PatternMapping`] machinery when `path` is `"."`.
     fn track_vendor_pattern(
         &self,
         vendor: &VendorSource,
@@ -187,6 +440,9 @@ pub trait Vendor {
     /// Refresh `.gitattributes` after a merge so that per-file entries match
     /// the merged result.  New upstream files get entries; deleted files lose
     /// them.
+    ///
+    /// `path` is the local directory under which vendored files live.  Pass
+    /// `Path::new(".")` when files are at the repository root.
     fn refresh_vendor_attrs(
         &self,
         vendor: &VendorSource,
@@ -206,8 +462,13 @@ pub trait Vendor {
     ///
     /// Unlike `merge_vendor`, which relies on files already present in HEAD to
     /// determine the upstream ↔ local mapping, `add_vendor` uses the given
-    /// `glob` and `path` to filter the upstream tree directly.  This makes it
-    /// suitable for the first-time add where no vendor files exist in HEAD yet.
+    /// `globs` and `path` to filter and place the upstream tree directly.  This
+    /// makes it suitable for the first-time add where no vendor files exist in
+    /// HEAD yet.
+    ///
+    /// `globs` may contain plain glob strings or strings with the colon mapping
+    /// syntax (e.g. `src/**:ext/`); see [`PatternMapping`].  When a plain glob
+    /// is given, `path` acts as the destination prefix.
     ///
     /// The resulting `git2::Index` contains the merged entries ready to be
     /// written to the working tree and staged.
@@ -373,36 +634,32 @@ impl Vendor for Repository {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        let gitattributes = workdir.join(path).join(".gitattributes");
+        // Always write to the root .gitattributes.
+        let gitattributes = workdir.join(".gitattributes");
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let vendor_attr = format!("vendor={}", vendor.name);
 
-        for glob in globs {
-            let glob_patterns: Vec<String> = vec![glob.to_string()];
-            let matcher = build_glob_matcher(&glob_patterns)?;
+        // Convert (globs, path) to PatternMappings.
+        // Each glob may already carry colon syntax (e.g. "src/**:ext/"); if so,
+        // parse it directly.  Otherwise apply `path` as the destination prefix.
+        let mappings = globs_and_path_to_mappings(globs, path);
 
-            let mut matched_files: Vec<String> = Vec::new();
+        // Collect (local_path) for each upstream file matched by any mapping.
+        let mut matched_local_paths: Vec<String> = Vec::new();
 
-            tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-                if entry.kind() != Some(git2::ObjectType::Blob) {
-                    return git2::TreeWalkResult::Ok;
-                }
-                let remote_path = format!("{}{}", dir, entry.name().unwrap());
-                if matcher.is_match(&remote_path) {
-                    matched_files.push(remote_path);
-                }
-                git2::TreeWalkResult::Ok
-            })?;
-
-            if matched_files.is_empty() {
-                continue;
+        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() != Some(git2::ObjectType::Blob) {
+                return git2::TreeWalkResult::Ok;
             }
-
-            let vendor_attr = format!("vendor={}", vendor.name);
-
-            for file in &matched_files {
-                let local_pattern = to_git_path(&path.join(file));
-                self.set_attr(&local_pattern, &[&vendor_attr], &gitattributes)?;
+            let upstream_path = format!("{}{}", dir, entry.name().unwrap_or(""));
+            if let Some(local_path) = apply_pattern_mappings(&mappings, &upstream_path) {
+                matched_local_paths.push(local_path);
             }
+            git2::TreeWalkResult::Ok
+        })?;
+
+        for local_path in &matched_local_paths {
+            self.set_attr(local_path, &[&vendor_attr], &gitattributes)?;
         }
 
         Ok(())
@@ -412,31 +669,31 @@ impl Vendor for Repository {
         &self,
         vendor: &VendorSource,
         globs: &[&str],
-        _path: &Path,
+        path: &Path,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        let matcher = build_glob_matcher(globs)?;
+        // Convert (globs, path) to PatternMappings.
+        let mappings = globs_and_path_to_mappings(globs, path);
 
-        // Build the set of upstream paths that match the glob pattern.
-        let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
-        let theirs_filtered =
-            self.filter_by_predicate(&theirs, |_repo, entry_path| matcher.is_match(entry_path))?;
+        // Build the remapped upstream tree: each upstream file is placed at its
+        // local (mapped) path according to the pattern mappings.
+        let upstream_tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
-        // Collect upstream paths so we can filter HEAD to only overlapping
-        // entries.  This lets merge_trees detect add/add conflicts when a
-        // local file already exists at the same path as an incoming vendor
-        // file.
-        let mut upstream_paths: HashSet<String> = HashSet::new();
-        theirs_filtered.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        // Collect local paths so we can filter HEAD to only overlapping entries.
+        // This lets merge_trees detect add/add conflicts when a local file already
+        // exists at the same local path as an incoming vendor file.
+        let mut local_paths: HashSet<String> = HashSet::new();
+        theirs_remapped.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
             if entry.kind() == Some(git2::ObjectType::Blob) {
-                upstream_paths.insert(format!("{}{}", dir, entry.name().unwrap()));
+                local_paths.insert(format!("{}{}", dir, entry.name().unwrap_or("")));
             }
             git2::TreeWalkResult::Ok
         })?;
 
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered =
-            self.filter_by_predicate(&ours, |_repo, p| upstream_paths.contains(&*to_git_path(p)))?;
+            self.filter_by_predicate(&ours, |_repo, p| local_paths.contains(&*to_git_path(p)))?;
 
         // Two-way merge: empty ancestor so that both sides look like pure
         // additions.  If the same path exists in both ours and theirs with
@@ -453,7 +710,7 @@ impl Vendor for Repository {
             opts.file_favor(favor);
         }
 
-        self.merge_trees(&empty_tree, &ours_filtered, &theirs_filtered, Some(&opts))
+        self.merge_trees(&empty_tree, &ours_filtered, &theirs_remapped, Some(&opts))
     }
 
     fn merge_vendor(
@@ -462,22 +719,24 @@ impl Vendor for Repository {
         _maybe_opts: Option<&mut git2::FetchOptions>,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        // UPSTREAM (theirs): use stored patterns to filter the upstream tree.
-        // This catches files added upstream since the last merge.
-        let matcher = build_glob_matcher(&vendor.patterns)?;
-        let theirs = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
-        let theirs_filtered =
-            self.filter_by_predicate(&theirs, |_repo, path| matcher.is_match(path))?;
+        // Parse stored patterns into mappings (supports colon syntax).
+        let mappings = parse_patterns(&vendor.patterns);
+
+        // UPSTREAM (theirs): remap the upstream tree to local paths via mappings.
+        let upstream_tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
         // LOCAL (ours): use gitattributes to find files currently tracked for
-        // this vendor.  Falls back to vendor patterns when the gitattribute
-        // is unset (e.g. legacy .gitattributes with `./` prefixed patterns).
+        // this vendor.  Falls back to glob matching against local paths when the
+        // gitattribute is unset (e.g. legacy .gitattributes or first-ever merge).
+        let glob_matcher = build_glob_matcher_from_mappings(&mappings)?;
         let expected_vendor = vendor.name.clone();
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered = self.filter_by_predicate(&ours, |repo, path| {
             match repo.get_attr(path, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
                 Ok(Some(value)) if value == expected_vendor => true,
-                _ => matcher.is_match(path),
+                // Legacy fallback: match local paths against the glob side of patterns.
+                _ => glob_matcher.is_match(path),
             }
         })?;
 
@@ -488,59 +747,86 @@ impl Vendor for Repository {
             opts.file_favor(favor);
         }
 
-        let base_commit = self.find_vendor_base(&vendor)?;
-        let base_full_tree;
+        // BASE: if a base commit is recorded, remap its tree the same way.
+        let base_commit = self.find_vendor_base(vendor)?;
         let base = match &base_commit {
             Some(c) => {
-                base_full_tree = c.as_object().peel_to_tree()?;
-                self.filter_by_predicate(&base_full_tree, |_repo, path| matcher.is_match(path))?
+                let base_full_tree = c.as_object().peel_to_tree()?;
+                remap_upstream_tree(self, &base_full_tree, &mappings)?
             }
             None => self.find_tree(ours_filtered.id())?,
         };
 
-        self.merge_trees(&base, &ours_filtered, &theirs_filtered, Some(&opts))
+        self.merge_trees(&base, &ours_filtered, &theirs_remapped, Some(&opts))
     }
 
     fn refresh_vendor_attrs(
         &self,
         vendor: &VendorSource,
         merged_index: &git2::Index,
-        path: &Path,
+        _path: &Path,
     ) -> Result<(), git2::Error> {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        let gitattributes = workdir.join(path).join(".gitattributes");
+        // Always use the root .gitattributes regardless of `_path`.
+        // The `_path` parameter is retained for API compatibility; the actual
+        // per-file paths are taken directly from the merged index entries.
+        let gitattributes = workdir.join(".gitattributes");
         let vendor_attr = format!("vendor={}", vendor.name);
-        let matcher = build_glob_matcher(&vendor.patterns)?;
 
-        // Collect all paths in the merged index that match the vendor's patterns.
-        let mut merged_paths: HashSet<PathBuf> = HashSet::new();
+        // Collect all stage-0 paths from the merged index that belong to this
+        // vendor.  We identify them by the `vendor` gitattribute (or by
+        // checking if the path appears in the remapped tree when no attr yet).
+        let expected_vendor = vendor.name.clone();
+        let mut merged_paths: HashSet<String> = HashSet::new();
         for entry in merged_index.iter() {
             let stage = (entry.flags >> 12) & 0x3;
             if stage != 0 {
                 continue;
             }
             if let Ok(entry_path) = std::str::from_utf8(&entry.path) {
-                let p = PathBuf::from(entry_path);
-                if matcher.is_match(&p) {
-                    merged_paths.insert(p);
-                }
+                // Include paths already attributed to this vendor in HEAD,
+                // plus any new path that was brought in by the merge
+                // (detected by checking the gitattr on the merged result –
+                // which may not yet be set for brand-new files, so we
+                // include all stage-0 entries and let the attribute file
+                // be the source of truth going forward).
+                merged_paths.insert(entry_path.to_string());
             }
         }
 
-        // Read existing gitattributes, remove stale entries for this vendor,
-        // keep everything else.
+        // Filter to only paths that are (or should be) owned by this vendor.
+        // Strategy: a path belongs to this vendor if:
+        //   (a) it already carries `vendor=<name>` in HEAD's gitattributes, OR
+        //   (b) it is a new file not yet attributed (we conservatively include
+        //       all stage-0 entries from the merge result and trust that the
+        //       caller only invokes refresh_vendor_attrs with a properly-scoped
+        //       merged_index).
+        let owned_paths: HashSet<String> = merged_paths
+            .into_iter()
+            .filter(|path| {
+                match self.get_attr(
+                    Path::new(path),
+                    "vendor",
+                    git2::AttrCheckFlags::FILE_THEN_INDEX,
+                ) {
+                    Ok(Some(value)) => value == expected_vendor,
+                    // New file not yet attributed – include it.
+                    _ => true,
+                }
+            })
+            .collect();
+
+        // Read existing root .gitattributes, remove stale entries for this
+        // vendor, keep everything else.
         let needle = format!("vendor={}", vendor.name);
         let mut lines: Vec<String> = if gitattributes.exists() {
             let content = std::fs::read_to_string(&gitattributes)
                 .map_err(|e| git2::Error::from_str(&format!("read .gitattributes: {e}")))?;
             content
                 .lines()
-                .filter(|line| {
-                    // Keep lines that don't belong to this vendor.
-                    !line.split_whitespace().any(|tok| tok == needle)
-                })
+                .filter(|line| !line.split_whitespace().any(|tok| tok == needle))
                 .map(String::from)
                 .collect()
         } else {
@@ -548,11 +834,10 @@ impl Vendor for Repository {
         };
 
         // Add per-file entries for all merged paths.
-        let mut sorted: Vec<_> = merged_paths.into_iter().collect();
+        let mut sorted: Vec<_> = owned_paths.into_iter().collect();
         sorted.sort();
         for file in sorted {
-            let local_pattern = path.join(&file);
-            let line = format!("{} {}", to_git_path(&local_pattern), vendor_attr);
+            let line = format!("{} {}", to_git_path(Path::new(&file)), vendor_attr);
             lines.push(line);
         }
 
