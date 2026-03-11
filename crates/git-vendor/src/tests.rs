@@ -577,7 +577,7 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     };
 
     // Pattern "*.txt:lib/" maps upstream "a.txt" → "lib/a.txt".
-    // Passing path="." so the colon syntax in the glob is honoured.
+    // Passing path="." so the colon syntax in the glob is honored.
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor, &["*.txt:lib/"], Path::new("."))
             .unwrap();

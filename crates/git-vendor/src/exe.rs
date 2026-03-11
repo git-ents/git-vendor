@@ -134,7 +134,7 @@ fn apply_default_path(patterns: &[&str], path: Option<&Path>) -> Vec<String> {
         return patterns.iter().map(|s| s.to_string()).collect();
     };
 
-    // Normalise to a forward-slash string ending with '/'.
+    // Normalize to a forward-slash string ending with '/'.
     let dest = {
         let s = dest_path.to_string_lossy().replace('\\', "/");
         let s = s.trim_end_matches('/');

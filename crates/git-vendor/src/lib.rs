@@ -160,7 +160,7 @@ fn build_glob_matcher(patterns: &[impl AsRef<str>]) -> Result<globset::GlobSet, 
 /// Otherwise `path` is applied as the destination prefix (unless `path` is
 /// `"."` or empty, which means "no remapping").
 fn globs_and_path_to_mappings(globs: &[&str], path: &Path) -> Vec<PatternMapping> {
-    // Determine the normalised destination string from `path`.
+    // Determine the normalized destination string from `path`.
     let dest: Option<String> = {
         let s = path.to_string_lossy().replace('\\', "/");
         let s = s.trim_end_matches('/');
