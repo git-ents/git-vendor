@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.0](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.1.1...git-vendor-v0.2.0) (2026-03-11)
+
+
+### Features
+
+* Add --path flag as default destination prefix for all patterns ([24c9c0b](https://github.com/git-ents/git-vendor/commit/24c9c0b6254b19b6216fec3243d58d04cce7d80c))
+* Add pattern-to-path mapping via colon syntax ([24c9c0b](https://github.com/git-ents/git-vendor/commit/24c9c0b6254b19b6216fec3243d58d04cce7d80c))
+* Place new upstream files at computed mapped paths during merge ([24c9c0b](https://github.com/git-ents/git-vendor/commit/24c9c0b6254b19b6216fec3243d58d04cce7d80c))
+
+
+### Bug Fixes
+
+* Omit summary when only one vendor is configured ([9c9f012](https://github.com/git-ents/git-vendor/commit/9c9f012f2d2252ec0422dc718cc04071e92cb8f8)), closes [#16](https://github.com/git-ents/git-vendor/issues/16)
+* Resolve --path relative to CWD within workdir ([30b78bc](https://github.com/git-ents/git-vendor/commit/30b78bcbacd801ccf0ad7c14befa57bedc7620cd)), closes [#19](https://github.com/git-ents/git-vendor/issues/19)
+* Sort gitattributes entries by pattern for deterministic ordering ([8fbe454](https://github.com/git-ents/git-vendor/commit/8fbe45474f94aad87d7ad96315d9545578477981)), closes [#18](https://github.com/git-ents/git-vendor/issues/18)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * git-set-attr bumped from 0.1.1 to 0.1.2
+
 ## [0.1.1](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.1.0...git-vendor-v0.1.1) (2026-03-08)
 
 

@@ -4,7 +4,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package]
 name = "git-set-attr"
-version = "0.1.1"
+version = "0.1.2"
 description = "Set Git attributes via code, or from the command-line."
 repository = "https://github.com/git-ents/git-vendor"
 documentation = "https://docs.rs/git-set-attr"
