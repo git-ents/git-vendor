@@ -565,11 +565,10 @@ impl Vendor for Repository {
                     git2::AttrCheckFlags::FILE_THEN_INDEX,
                 )
                 .ok()
-            }) {
-                if attrs == Some("true") || attrs == Some("set") {
+            })
+                && (attrs == Some("true") || attrs == Some("set")) {
                     vendored_entries.push(entry.to_owned());
                 }
-            }
             git2::TreeWalkResult::Ok
         })?;
 
@@ -864,7 +863,7 @@ impl Vendor for Repository {
             Some(base) => {
                 let oid = git2::Oid::from_str(base)?;
                 let commit = self.find_commit(oid)?;
-                return Ok(Some(commit));
+                Ok(Some(commit))
             }
             _ => Ok(None),
         }

@@ -468,11 +468,11 @@ fn find_gitattributes(workdir: &Path) -> Vec<std::path::PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 // Skip .git directory.
-                if path.file_name().map_or(false, |n| n == ".git") {
+                if path.file_name().is_some_and(|n| n == ".git") {
                     continue;
                 }
                 walk(&path, results);
-            } else if path.file_name().map_or(false, |n| n == ".gitattributes") {
+            } else if path.file_name().is_some_and(|n| n == ".gitattributes") {
                 results.push(path);
             }
         }
@@ -639,13 +639,12 @@ fn merge_vendor(
     let vendor_commit = vendor_ref.peel_to_commit()?;
 
     // Nothing to do when the base already matches the upstream tip.
-    if let Some(base) = &vendor.base {
-        if git2::Oid::from_str(base)? == vendor_commit.id() {
+    if let Some(base) = &vendor.base
+        && git2::Oid::from_str(base)? == vendor_commit.id() {
             return Ok(MergeOutcome::UpToDate {
                 vendor: vendor.clone(),
             });
         }
-    }
 
     // Always update base in .gitvendors to the current upstream tip.
     let updated = VendorSource {

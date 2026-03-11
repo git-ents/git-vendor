@@ -35,7 +35,7 @@ impl SetAttr for Repository {
         validate_attributes(attributes)?;
 
         let mut lines = if gitattributes_path.exists() {
-            let file = fs::File::open(&gitattributes_path)
+            let file = fs::File::open(gitattributes_path)
                 .map_err(|e| Error::from_str(&format!("Failed to open .gitattributes: {e}")))?;
             let reader = BufReader::new(file);
             reader
