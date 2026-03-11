@@ -53,6 +53,20 @@ impl SetAttr for Repository {
             lines.push(attr_line);
         }
 
+        // Sort attribute lines by pattern to ensure deterministic ordering.
+        // Comments and blank lines are preserved after all attribute lines.
+        lines.sort_by(|a, b| {
+            let key = |l: &String| {
+                let trimmed = l.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    (1, trimmed.to_string())
+                } else {
+                    (0, trimmed.to_string())
+                }
+            };
+            key(a).cmp(&key(b))
+        });
+
         if let Some(parent) = gitattributes_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 Error::from_str(&format!(

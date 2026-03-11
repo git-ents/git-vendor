@@ -841,6 +841,23 @@ impl Vendor for Repository {
             lines.push(line);
         }
 
+        // Sort attribute lines by pattern to ensure deterministic ordering
+        // across runs, regardless of which vendor's entries were removed and
+        // re-added.  Comments and blank lines are stripped (gitattributes
+        // written by this tool are fully generated).
+        lines.sort_by(|a, b| {
+            let key = |l: &String| {
+                let trimmed = l.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    // Sort blanks/comments after all attribute lines.
+                    (1, trimmed.to_string())
+                } else {
+                    (0, trimmed.to_string())
+                }
+            };
+            key(a).cmp(&key(b))
+        });
+
         // Write back.
         if let Some(parent) = gitattributes.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {

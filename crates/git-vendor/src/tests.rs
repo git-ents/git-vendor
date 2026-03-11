@@ -1730,3 +1730,116 @@ fn test_add_vendor_glob_filtering_with_mapping() {
         );
     });
 }
+
+/// Regression test for <https://github.com/git-ents/git-vendor/issues/18>.
+///
+/// When `refresh_vendor_attrs` removes and re-adds entries for a vendor,
+/// the resulting `.gitattributes` must be sorted by pattern so that the
+/// file doesn't churn across runs.
+#[test]
+fn test_refresh_vendor_attrs_ordering_is_consistent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    // Seed .gitattributes with entries whose natural sort order differs
+    // from the order they'd appear if simply appended after other vendors.
+    // This mirrors the issue where `.github/workflows/*` moved after
+    // `.config/*` on a subsequent `git vendor pull`.
+    let initial_attrs = "\
+.github/workflows/CD.yml vendor=myvendor
+.github/workflows/CI.yml vendor=myvendor
+.config/committed.toml vendor=myvendor
+.config/deny.toml vendor=myvendor
+";
+    std::fs::write(tmp.path().join(".gitattributes"), initial_attrs).unwrap();
+
+    // Create the files so the repo has content.
+    std::fs::create_dir_all(tmp.path().join(".github/workflows")).unwrap();
+    std::fs::create_dir_all(tmp.path().join(".config")).unwrap();
+    std::fs::write(tmp.path().join(".github/workflows/CD.yml"), "cd").unwrap();
+    std::fs::write(tmp.path().join(".github/workflows/CI.yml"), "ci").unwrap();
+    std::fs::write(tmp.path().join(".config/committed.toml"), "c").unwrap();
+    std::fs::write(tmp.path().join(".config/deny.toml"), "d").unwrap();
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "initial",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    // Build a merged index containing all four paths.
+    let mut merged_index = git2::Index::new().unwrap();
+    for (path, content) in [
+        (".config/committed.toml", b"c" as &[u8]),
+        (".config/deny.toml", b"d"),
+        (".github/workflows/CD.yml", b"cd"),
+        (".github/workflows/CI.yml", b"ci"),
+    ] {
+        let blob_oid = repo.blob(content).unwrap();
+        merged_index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: blob_oid,
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            })
+            .unwrap();
+    }
+
+    let vendor = VendorSource {
+        name: "myvendor".into(),
+        url: "https://example.com/myvendor.git".into(),
+        branch: None,
+        base: None,
+        patterns: vec!["**".into()],
+    };
+
+    with_cwd(tmp.path(), || {
+        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("."))
+            .unwrap();
+    });
+
+    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let attr_lines: Vec<&str> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .collect();
+
+    // The entries must be sorted lexicographically by pattern.
+    let mut sorted = attr_lines.clone();
+    sorted.sort();
+    assert_eq!(
+        attr_lines, sorted,
+        "gitattributes entries must be sorted; got:\n{content}"
+    );
+
+    // Run it again — output must be identical (idempotent).
+    with_cwd(tmp.path(), || {
+        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("."))
+            .unwrap();
+    });
+
+    let content2 = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    assert_eq!(content, content2, "refresh_vendor_attrs must be idempotent");
+}
