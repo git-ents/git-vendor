@@ -196,7 +196,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                         None => println!("{}: up to date", s.name),
                     }
                 }
-                if !any_updates {
+                if !any_updates && statuses.len() > 1 {
                     println!("\nAll vendors are up to date.");
                 }
             }
