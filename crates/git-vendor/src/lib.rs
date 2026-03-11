@@ -79,11 +79,7 @@ impl PatternMapping {
             None => {
                 // No glob characters at all; the whole thing is a literal prefix
                 // (directory shorthand).
-                if glob.ends_with('/') {
-                    glob
-                } else {
-                    ""
-                }
+                if glob.ends_with('/') { glob } else { "" }
             }
         }
     }
@@ -120,7 +116,9 @@ impl PatternMapping {
 
 /// Parse a slice of raw pattern strings into [`PatternMapping`]s.
 pub fn parse_patterns(raws: &[impl AsRef<str>]) -> Vec<PatternMapping> {
-    raws.iter().map(|r| PatternMapping::parse(r.as_ref())).collect()
+    raws.iter()
+        .map(|r| PatternMapping::parse(r.as_ref()))
+        .collect()
 }
 
 /// Build a [`globset::GlobSet`] from a slice of [`PatternMapping`]s, using
@@ -267,7 +265,10 @@ fn build_tree_from_entries<'a>(
 
     for (path, oid, mode) in entries {
         if let Some((dir, rest)) = path.split_once('/') {
-            subdirs.entry(dir).or_default().push((rest.to_string(), *oid, *mode));
+            subdirs
+                .entry(dir)
+                .or_default()
+                .push((rest.to_string(), *oid, *mode));
         } else {
             root_files.push((path.as_str(), *oid, *mode));
         }
@@ -565,10 +566,10 @@ impl Vendor for Repository {
                     git2::AttrCheckFlags::FILE_THEN_INDEX,
                 )
                 .ok()
-            })
-                && (attrs == Some("true") || attrs == Some("set")) {
-                    vendored_entries.push(entry.to_owned());
-                }
+            }) && (attrs == Some("true") || attrs == Some("set"))
+            {
+                vendored_entries.push(entry.to_owned());
+            }
             git2::TreeWalkResult::Ok
         })?;
 

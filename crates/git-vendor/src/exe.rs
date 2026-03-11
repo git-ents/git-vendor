@@ -640,11 +640,12 @@ fn merge_vendor(
 
     // Nothing to do when the base already matches the upstream tip.
     if let Some(base) = &vendor.base
-        && git2::Oid::from_str(base)? == vendor_commit.id() {
-            return Ok(MergeOutcome::UpToDate {
-                vendor: vendor.clone(),
-            });
-        }
+        && git2::Oid::from_str(base)? == vendor_commit.id()
+    {
+        return Ok(MergeOutcome::UpToDate {
+            vendor: vendor.clone(),
+        });
+    }
 
     // Always update base in .gitvendors to the current upstream tip.
     let updated = VendorSource {
