@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -8,6 +9,8 @@ use crate::CommitMode;
 use crate::PatternMapping;
 use crate::Vendor;
 use crate::VendorSource;
+use crate::parse_patterns;
+use crate::remap_upstream_tree;
 
 /// Open a repository from the given path, or from the environment / current
 /// directory when `None` is passed.
@@ -815,6 +818,12 @@ fn merge_vendor(
         });
     }
 
+    // Capture the old base OID before updating so we can walk base..head.
+    let old_base_oid = vendor
+        .base
+        .as_deref()
+        .and_then(|b| git2::Oid::from_str(b).ok());
+
     // Always update base in .gitvendors to the current upstream tip.
     let updated = VendorSource {
         name: vendor.name.clone(),
@@ -853,37 +862,308 @@ fn merge_vendor(
     }
     repo_index.write()?;
 
-    if no_commit {
-        let vendor = match &outcome {
-            MergeOutcome::Clean { vendor } | MergeOutcome::Conflict { vendor, .. } => vendor,
-            MergeOutcome::UpToDate { .. } => unreachable!("no_commit on up-to-date vendor"),
-        };
-        write_vendor_msg(repo, vendor, &vendor_commit)?;
+    match &outcome {
+        MergeOutcome::Clean {
+            vendor: updated_vendor,
+        } => {
+            if no_commit {
+                write_vendor_msg(repo, updated_vendor, old_base_oid, &vendor_commit, false)?;
+            } else {
+                commit_vendor_merge(repo, updated_vendor, old_base_oid, &vendor_commit)?;
+            }
+        }
+        MergeOutcome::Conflict {
+            vendor: updated_vendor,
+            ..
+        } => {
+            write_vendor_msg(repo, updated_vendor, old_base_oid, &vendor_commit, true)?;
+        }
+        MergeOutcome::UpToDate { .. } => unreachable!("up-to-date vendor after staging"),
     }
 
     Ok(outcome)
 }
 
-/// Write a prepared commit message to `.git/VENDOR_MSG` for `--no-commit` merges.
-fn write_vendor_msg(
+/// Collect upstream commits in the range `old_base..head` (oldest-first).
+///
+/// When `old_base` is `None` (first-time add), returns only `head`.
+fn collect_upstream_commits<'a>(
+    repo: &'a Repository,
+    old_base: Option<git2::Oid>,
+    head: &git2::Commit<'a>,
+) -> Result<Vec<git2::Commit<'a>>, git2::Error> {
+    let mut walk = repo.revwalk()?;
+    walk.push(head.id())?;
+    if let Some(base_oid) = old_base {
+        walk.hide(base_oid)?;
+    }
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+    let mut commits = Vec::new();
+    for oid in walk {
+        commits.push(repo.find_commit(oid?)?);
+    }
+    Ok(commits)
+}
+
+/// Summarize author contributions across a list of commits.
+///
+/// Returns a `Vec` of `(name, email, count)` sorted by descending count.
+fn author_summary(commits: &[git2::Commit<'_>]) -> Vec<(String, String, usize)> {
+    let mut map: HashMap<(String, String), usize> = HashMap::new();
+    for c in commits {
+        let sig = c.author();
+        let name = sig.name().unwrap_or("Unknown").to_string();
+        let email = sig.email().unwrap_or("").to_string();
+        *map.entry((name, email)).or_insert(0) += 1;
+    }
+    let mut v: Vec<_> = map
+        .into_iter()
+        .map(|((n, e), count)| (n, e, count))
+        .collect();
+    v.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// Diff stats between two trees (or an empty tree vs `new_tree` when `old_tree` is None).
+struct DiffStats {
+    added: usize,
+    removed: usize,
+    modified: usize,
+}
+
+fn diff_stats(
+    repo: &Repository,
+    old_tree: Option<&git2::Tree<'_>>,
+    new_tree: &git2::Tree<'_>,
+) -> Result<DiffStats, git2::Error> {
+    let diff = repo.diff_tree_to_tree(old_tree, Some(new_tree), None)?;
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    let mut modified = 0usize;
+    for delta in diff.deltas() {
+        match delta.status() {
+            git2::Delta::Added => added += 1,
+            git2::Delta::Deleted => removed += 1,
+            _ => modified += 1,
+        }
+    }
+    Ok(DiffStats {
+        added,
+        removed,
+        modified,
+    })
+}
+
+/// Build the VENDOR_MSG body (subject + body paragraphs, no trailing newline).
+fn build_vendor_msg(
     repo: &Repository,
     vendor: &VendorSource,
+    old_base_oid: Option<git2::Oid>,
     head_commit: &git2::Commit<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let base_short = vendor
-        .base
-        .as_deref()
-        .and_then(|b| b.get(..7))
-        .unwrap_or("unknown");
+) -> Result<String, Box<dyn std::error::Error>> {
+    let old_base_short = old_base_oid
+        .map(|o| o.to_string()[..7].to_string())
+        .unwrap_or_else(|| "0000000".to_string());
     let head_short = &head_commit.id().to_string()[..7];
     let branch = vendor.branch.as_deref().unwrap_or("HEAD");
 
-    let msg = format!(
-        "Vendor update: {} {} ({}...{})\n",
-        vendor.name, branch, base_short, head_short,
+    let commits = collect_upstream_commits(repo, old_base_oid, head_commit)?;
+    let authors = author_summary(&commits);
+
+    // Diff stats: compare old base tree vs new head tree.
+    let old_tree = old_base_oid
+        .and_then(|o| repo.find_commit(o).ok())
+        .and_then(|c| c.tree().ok());
+    let new_tree = head_commit.tree()?;
+    let stats = diff_stats(repo, old_tree.as_ref(), &new_tree)?;
+    let total = stats.added + stats.removed + stats.modified;
+
+    let subject = format!(
+        "Vendor update: {} {} ({}...{})",
+        vendor.name, branch, old_base_short, head_short,
     );
 
+    let body = format!(
+        "Updated {} files. {} added, {} removed, {} modified.",
+        total, stats.added, stats.removed, stats.modified,
+    );
+
+    let author_trailers: Vec<String> = authors
+        .iter()
+        .map(|(name, email, count)| {
+            format!("Upstream-Author: {} <{}> ({} commits)", name, email, count)
+        })
+        .collect();
+
+    let mut parts = vec![subject, String::new(), body, String::new()];
+    parts.extend(author_trailers);
+    Ok(parts.join("\n"))
+}
+
+/// Write a prepared commit message to `.git/VENDOR_MSG`.
+///
+/// When `is_conflict` is true, appends instructions for the user to resolve
+/// conflicts and commit manually.
+fn write_vendor_msg(
+    repo: &Repository,
+    vendor: &VendorSource,
+    old_base_oid: Option<git2::Oid>,
+    head_commit: &git2::Commit<'_>,
+    is_conflict: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut msg = build_vendor_msg(repo, vendor, old_base_oid, head_commit)?;
+
+    if is_conflict {
+        msg.push_str(
+            "\n\n# Conflicts detected. Resolve them, then commit with:\n\
+             #   git commit -e -F .git/VENDOR_MSG",
+        );
+    }
+
+    msg.push('\n');
     let git_dir = repo.path();
-    std::fs::write(git_dir.join("VENDOR_MSG"), msg)?;
+    std::fs::write(git_dir.join("VENDOR_MSG"), &msg)?;
+    Ok(())
+}
+
+/// Create the local commit(s) after a clean merge, according to `vendor.commit`.
+fn commit_vendor_merge(
+    repo: &Repository,
+    vendor: &VendorSource,
+    old_base_oid: Option<git2::Oid>,
+    head_commit: &git2::Commit<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match &vendor.commit {
+        CommitMode::Squash => commit_squash(repo, vendor, old_base_oid, head_commit),
+        CommitMode::Linear => commit_linear(repo, vendor, old_base_oid, head_commit),
+        CommitMode::Replay => commit_replay(repo, vendor, old_base_oid, head_commit),
+    }
+}
+
+/// Local git config signature (committer / author for local commits).
+fn local_signature(repo: &Repository) -> Result<git2::Signature<'static>, git2::Error> {
+    let cfg = repo.config()?;
+    let name = cfg
+        .get_string("user.name")
+        .unwrap_or_else(|_| "git-vendor".to_string());
+    let email = cfg
+        .get_string("user.email")
+        .unwrap_or_else(|_| "git-vendor@localhost".to_string());
+    git2::Signature::now(&name, &email)
+}
+
+/// Squash mode: create a synthetic second-parent commit whose tree is the
+/// remapped upstream tree, then a merge commit with HEAD + that synthetic
+/// commit as parents.
+fn commit_squash(
+    repo: &Repository,
+    vendor: &VendorSource,
+    old_base_oid: Option<git2::Oid>,
+    head_commit: &git2::Commit<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sig = local_signature(repo)?;
+    let msg = build_vendor_msg(repo, vendor, old_base_oid, head_commit)?;
+
+    // The synthetic squash commit has the upstream tree (not remapped — it
+    // represents the upstream state for DAG purposes) and no parents.
+    let upstream_tree = head_commit.tree()?;
+    let squash_oid = repo.commit(None, &sig, &sig, &msg, &upstream_tree, &[])?;
+    let squash_commit = repo.find_commit(squash_oid)?;
+
+    // HEAD commit.
+    let head_local = repo.head()?.peel_to_commit()?;
+
+    // The merge commit tree comes from the staged index.
+    let mut index = repo.index()?;
+    let tree_oid = index.write_tree()?;
+    let merge_tree = repo.find_tree(tree_oid)?;
+
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        &format!("{}\n", msg),
+        &merge_tree,
+        &[&head_local, &squash_commit],
+    )?;
+
+    // Clear the merge state so git doesn't think there's a pending merge.
+    repo.cleanup_state()?;
+    Ok(())
+}
+
+/// Linear mode: single-parent commit on HEAD.
+fn commit_linear(
+    repo: &Repository,
+    vendor: &VendorSource,
+    old_base_oid: Option<git2::Oid>,
+    head_commit: &git2::Commit<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sig = local_signature(repo)?;
+    let msg = build_vendor_msg(repo, vendor, old_base_oid, head_commit)?;
+
+    let head_local = repo.head()?.peel_to_commit()?;
+    let mut index = repo.index()?;
+    let tree_oid = index.write_tree()?;
+    let tree = repo.find_tree(tree_oid)?;
+
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        &format!("{}\n", msg),
+        &tree,
+        &[&head_local],
+    )?;
+
+    repo.cleanup_state()?;
+    Ok(())
+}
+
+/// Replay mode: walk base..head commits and replay each one onto HEAD,
+/// preserving original author identity.
+fn commit_replay(
+    repo: &Repository,
+    vendor: &VendorSource,
+    old_base_oid: Option<git2::Oid>,
+    head_commit: &git2::Commit<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let committer = local_signature(repo)?;
+    let mappings = parse_patterns(&vendor.patterns);
+    let commits = collect_upstream_commits(repo, old_base_oid, head_commit)?;
+
+    if commits.is_empty() {
+        return Ok(());
+    }
+
+    let mut parent_oid = repo.head()?.peel_to_commit()?.id();
+
+    for upstream_commit in &commits {
+        let upstream_tree = upstream_commit.tree()?;
+        let remapped_tree = remap_upstream_tree(repo, &upstream_tree, &mappings)?;
+
+        let author = upstream_commit.author();
+        // Preserve original author time; committer is local user with now.
+        let author_sig = git2::Signature::new(
+            author.name().unwrap_or("Unknown"),
+            author.email().unwrap_or(""),
+            &author.when(),
+        )?;
+
+        let parent_commit = repo.find_commit(parent_oid)?;
+        let msg = upstream_commit.message().unwrap_or("").to_string();
+
+        let new_oid = repo.commit(
+            Some("HEAD"),
+            &author_sig,
+            &committer,
+            &msg,
+            &remapped_tree,
+            &[&parent_commit],
+        )?;
+        parent_oid = new_oid;
+    }
+
+    repo.cleanup_state()?;
     Ok(())
 }

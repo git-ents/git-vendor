@@ -163,7 +163,7 @@ impl GlobSetBuilderExt for globset::GlobSetBuilder {
 ///
 /// The resulting tree has entries keyed by local path, ready to be used as
 /// "theirs" in a merge against HEAD.
-fn remap_upstream_tree<'a>(
+pub(crate) fn remap_upstream_tree<'a>(
     repo: &'a git2::Repository,
     upstream_tree: &git2::Tree<'_>,
     mappings: &[PatternMapping],
