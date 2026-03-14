@@ -9,3 +9,4 @@
 .github/workflows/CI.yml vendor=git-rewrite
 .github/workflows/Lint.yml vendor=git-rewrite
 .github/workflows/Version.yml vendor=git-rewrite
+.rules vendor=git-rewrite
