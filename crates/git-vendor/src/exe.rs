@@ -1051,7 +1051,7 @@ fn diff_stats(
 }
 
 /// Build the VENDOR_MSG body (subject + body paragraphs, no trailing newline).
-fn build_vendor_msg(
+pub(crate) fn build_vendor_msg(
     repo: &Repository,
     vendor: &VendorSource,
     old_base_oid: Option<git2::Oid>,

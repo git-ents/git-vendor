@@ -1856,3 +1856,624 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     let content2 = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
     assert_eq!(content, content2, "refresh_vendor_attrs must be idempotent");
 }
+
+// ---------------------------------------------------------------------------
+// Commit mode + VENDOR_MSG tests
+// ---------------------------------------------------------------------------
+
+/// Write a `.gitvendors` file for the given vendor using `to_config` so that
+/// all fields (including `commit` mode) are serialized correctly.
+fn write_gitvendors(tmp: &Path, vendor: &VendorSource) {
+    let path = tmp.join(".gitvendors");
+    // Ensure the file exists before opening (libgit2 requires it).
+    if !path.exists() {
+        std::fs::write(&path, "").unwrap();
+    }
+    let mut cfg = git2::Config::open(&path).unwrap();
+    vendor.to_config(&mut cfg).unwrap();
+}
+
+/// Set up a repo with a HEAD commit containing a vendored file plus
+/// `.gitattributes` and `.gitvendors`, a recorded `base` pointing at the
+/// upstream, and a *new* upstream tip that adds one line.
+///
+/// Returns `(repo, tmp, vendor_with_old_base, old_base_oid, new_head_commit_oid)`.
+fn setup_commit_mode_scenario(
+    vendor_name: &str,
+    commit_mode: super::CommitMode,
+) -> (
+    git2::Repository,
+    tempfile::TempDir,
+    VendorSource,
+    git2::Oid,
+    git2::Oid,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    // Build the "old" upstream tree and commit it as the base.
+    let old_base_oid = {
+        let old_upstream_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
+        repo.commit(
+            None,
+            &test_sig(),
+            &test_sig(),
+            "upstream v1",
+            &old_upstream_tree,
+            &[],
+        )
+        .unwrap()
+    };
+
+    // HEAD: vendored file + attrs + gitvendors (with base = old_base_oid).
+    let attrs = format!("a.txt vendor={vendor_name}\n");
+    std::fs::write(tmp.path().join(".gitattributes"), &attrs).unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"v1\n").unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        branch: Some("main".into()),
+        base: Some(old_base_oid.to_string()),
+        commit: commit_mode,
+        patterns: vec!["**".into()],
+    };
+    write_gitvendors(tmp.path(), &vendor);
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "local HEAD",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    // New upstream tip: adds a line.
+    let new_head_oid = {
+        let new_upstream_tree = build_tree(&repo, &[("a.txt", b"v1\nv2\n")]);
+        repo.commit(
+            Some(&format!("refs/vendor/{vendor_name}/head")),
+            &test_sig(),
+            &test_sig(),
+            "upstream v2",
+            &new_upstream_tree,
+            &[],
+        )
+        .unwrap()
+    };
+
+    (repo, tmp, vendor, old_base_oid, new_head_oid)
+}
+
+#[test]
+fn test_commit_mode_linear_creates_single_parent_commit() {
+    let (repo, tmp, _vendor, _old_base, _new_head) =
+        setup_commit_mode_scenario("lin", super::CommitMode::Linear);
+
+    let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+    with_cwd(tmp.path(), || {
+        crate::exe::merge_one(&repo, "lin", None, false).unwrap();
+    });
+
+    let head_after = repo.head().unwrap().peel_to_commit().unwrap();
+    assert_ne!(
+        head_after.id(),
+        head_before,
+        "a new commit should be created"
+    );
+    assert_eq!(
+        head_after.parent_count(),
+        1,
+        "linear mode must produce a single-parent commit"
+    );
+    assert_eq!(
+        head_after.parent(0).unwrap().id(),
+        head_before,
+        "parent must be the old HEAD"
+    );
+}
+
+#[test]
+fn test_commit_mode_squash_creates_merge_commit() {
+    let (repo, tmp, _vendor, _old_base, _new_head) =
+        setup_commit_mode_scenario("sq", super::CommitMode::Squash);
+
+    let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+    with_cwd(tmp.path(), || {
+        crate::exe::merge_one(&repo, "sq", None, false).unwrap();
+    });
+
+    let head_after = repo.head().unwrap().peel_to_commit().unwrap();
+    assert_ne!(head_after.id(), head_before);
+    assert_eq!(
+        head_after.parent_count(),
+        2,
+        "squash mode must produce a two-parent merge commit"
+    );
+    assert_eq!(
+        head_after.parent(0).unwrap().id(),
+        head_before,
+        "first parent must be the old HEAD"
+    );
+}
+
+#[test]
+fn test_commit_mode_replay_creates_one_commit_per_upstream() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    let vendor_name = "replay";
+
+    // Old upstream commit.
+    let old_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
+    let old_base_oid = repo
+        .commit(None, &test_sig(), &test_sig(), "up v1", &old_tree, &[])
+        .unwrap();
+    let old_base_commit = repo.find_commit(old_base_oid).unwrap();
+
+    // Two new upstream commits building on the old base.
+    let mid_tree = build_tree(&repo, &[("a.txt", b"v1\nv2\n")]);
+    let mid_oid = repo
+        .commit(
+            None,
+            &test_sig(),
+            &test_sig(),
+            "up v2",
+            &mid_tree,
+            &[&old_base_commit],
+        )
+        .unwrap();
+    let mid_commit = repo.find_commit(mid_oid).unwrap();
+
+    let new_tree = build_tree(&repo, &[("a.txt", b"v1\nv2\nv3\n")]);
+    let new_head_oid = repo
+        .commit(
+            Some(&format!("refs/vendor/{vendor_name}/head")),
+            &test_sig(),
+            &test_sig(),
+            "up v3",
+            &new_tree,
+            &[&mid_commit],
+        )
+        .unwrap();
+    let _ = new_head_oid;
+
+    // HEAD: local repo with vendored file.
+    let attrs = format!("a.txt vendor={vendor_name}\n");
+    std::fs::write(tmp.path().join(".gitattributes"), &attrs).unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"v1\n").unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        branch: None,
+        base: Some(old_base_oid.to_string()),
+        commit: super::CommitMode::Replay,
+        patterns: vec!["**".into()],
+    };
+    write_gitvendors(tmp.path(), &vendor);
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "local HEAD",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+    with_cwd(tmp.path(), || {
+        crate::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+    });
+
+    // Two upstream commits (v2 and v3) should have been replayed.
+    let head_after = repo.head().unwrap().peel_to_commit().unwrap();
+    assert_ne!(head_after.id(), head_before);
+
+    // Walk back two commits from HEAD.
+    let commit2 = head_after.clone();
+    let commit1 = commit2.parent(0).unwrap();
+    assert_eq!(
+        commit1.parent(0).unwrap().id(),
+        head_before,
+        "two commits ago must be the old HEAD"
+    );
+    assert_eq!(commit2.summary(), Some("up v3"));
+    assert_eq!(commit1.summary(), Some("up v2"));
+}
+
+#[test]
+fn test_commit_mode_replay_preserves_author_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    let vendor_name = "repauth";
+
+    let old_tree = build_tree(&repo, &[("f.txt", b"old\n")]);
+    let old_base_oid = repo
+        .commit(None, &test_sig(), &test_sig(), "base", &old_tree, &[])
+        .unwrap();
+    let old_base_commit = repo.find_commit(old_base_oid).unwrap();
+
+    let upstream_author = git2::Signature::new(
+        "Alice Upstream",
+        "alice@upstream.org",
+        &git2::Time::new(1_700_000_000, 0),
+    )
+    .unwrap();
+    let new_tree = build_tree(&repo, &[("f.txt", b"new\n")]);
+    repo.commit(
+        Some(&format!("refs/vendor/{vendor_name}/head")),
+        &upstream_author,
+        &upstream_author,
+        "upstream change",
+        &new_tree,
+        &[&old_base_commit],
+    )
+    .unwrap();
+
+    let attrs = format!("f.txt vendor={vendor_name}\n");
+    std::fs::write(tmp.path().join(".gitattributes"), &attrs).unwrap();
+    std::fs::write(tmp.path().join("f.txt"), b"old\n").unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        branch: None,
+        base: Some(old_base_oid.to_string()),
+        commit: super::CommitMode::Replay,
+        patterns: vec!["**".into()],
+    };
+    write_gitvendors(tmp.path(), &vendor);
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "local HEAD",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    with_cwd(tmp.path(), || {
+        crate::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+    });
+
+    let replayed = repo.head().unwrap().peel_to_commit().unwrap();
+    let author = replayed.author();
+    assert_eq!(author.name(), Some("Alice Upstream"));
+    assert_eq!(author.email(), Some("alice@upstream.org"));
+    assert_eq!(author.when().seconds(), 1_700_000_000);
+}
+
+#[test]
+fn test_no_commit_writes_vendor_msg_and_does_not_commit() {
+    let (repo, tmp, _vendor, _old_base, _new_head) =
+        setup_commit_mode_scenario("nc", super::CommitMode::Linear);
+
+    let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+    with_cwd(tmp.path(), || {
+        crate::exe::merge_one(&repo, "nc", None, true).unwrap();
+    });
+
+    // HEAD must not have advanced.
+    let head_after = repo.head().unwrap().peel_to_commit().unwrap().id();
+    assert_eq!(
+        head_after, head_before,
+        "--no-commit must not create a commit"
+    );
+
+    // VENDOR_MSG must have been written.
+    let msg_path = repo.path().join("VENDOR_MSG");
+    assert!(
+        msg_path.exists(),
+        "VENDOR_MSG must be written for --no-commit"
+    );
+    let msg = std::fs::read_to_string(&msg_path).unwrap();
+    assert!(
+        msg.contains("Vendor update:"),
+        "VENDOR_MSG must contain subject line; got:\n{msg}"
+    );
+}
+
+#[test]
+fn test_vendor_msg_format_contains_required_sections() {
+    let (repo, tmp, vendor, old_base_oid, new_head_oid) =
+        setup_commit_mode_scenario("vmf", super::CommitMode::Linear);
+
+    let head_commit = repo.find_commit(new_head_oid).unwrap();
+    let msg = with_cwd(tmp.path(), || {
+        crate::exe::build_vendor_msg(&repo, &vendor, Some(old_base_oid), &head_commit).unwrap()
+    });
+
+    // Subject line.
+    assert!(
+        msg.starts_with("Vendor update: vmf main"),
+        "subject must start with 'Vendor update: vmf main'; got:\n{msg}"
+    );
+    // File stats line.
+    assert!(
+        msg.contains("Updated") && msg.contains("added") && msg.contains("removed"),
+        "body must contain file stats; got:\n{msg}"
+    );
+    // Upstream-Author trailer.
+    assert!(
+        msg.contains("Upstream-Author:"),
+        "must contain Upstream-Author trailer; got:\n{msg}"
+    );
+}
+
+#[test]
+fn test_conflict_vendor_msg_contains_resolution_hint() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    let vendor_name = "confmsg";
+
+    // Set up a conflict scenario.
+    let attrs = format!("f.txt vendor={vendor_name}\n");
+    std::fs::write(tmp.path().join(".gitattributes"), &attrs).unwrap();
+    std::fs::write(tmp.path().join("f.txt"), b"original\n").unwrap();
+
+    let base_oid = {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let base_upstream_tree = build_tree(&repo, &[("f.txt", b"original\n")]);
+        let base_commit_oid = repo
+            .commit(
+                None,
+                &test_sig(),
+                &test_sig(),
+                "base upstream",
+                &base_upstream_tree,
+                &[],
+            )
+            .unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "local base",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        base_commit_oid
+    };
+
+    // Local change.
+    std::fs::write(tmp.path().join("f.txt"), b"local edit\n").unwrap();
+    let local_head = repo.head().unwrap().peel_to_commit().unwrap();
+    commit_workdir(&repo, "local edit", &[&local_head]);
+
+    // Conflicting upstream change.
+    let upstream_tree = build_tree(&repo, &[("f.txt", b"upstream edit\n")]);
+    repo.commit(
+        Some(&format!("refs/vendor/{vendor_name}/head")),
+        &test_sig(),
+        &test_sig(),
+        "upstream edit",
+        &upstream_tree,
+        &[],
+    )
+    .unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        branch: None,
+        base: Some(base_oid.to_string()),
+        commit: super::CommitMode::Linear,
+        patterns: vec!["**".into()],
+    };
+    write_gitvendors(tmp.path(), &vendor);
+
+    with_cwd(tmp.path(), || {
+        let outcome = crate::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        assert!(
+            matches!(outcome, crate::exe::MergeOutcome::Conflict { .. }),
+            "expected conflict outcome"
+        );
+    });
+
+    let msg_path = repo.path().join("VENDOR_MSG");
+    assert!(msg_path.exists(), "VENDOR_MSG must be written on conflict");
+    let msg = std::fs::read_to_string(&msg_path).unwrap();
+    assert!(
+        msg.contains("git commit -e -F .git/VENDOR_MSG"),
+        "conflict VENDOR_MSG must contain resolution instructions; got:\n{msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Invariant: base written only after staging / commit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_base_written_after_staging_not_before_merge() {
+    let (repo, tmp, vendor, old_base_oid, _new_head) =
+        setup_commit_mode_scenario("bwrt", super::CommitMode::Linear);
+
+    // Read .gitvendors before the merge to capture the old base.
+    let gitvendors_before = std::fs::read_to_string(tmp.path().join(".gitvendors")).unwrap();
+    assert!(
+        gitvendors_before.contains(&old_base_oid.to_string()),
+        "pre-merge .gitvendors must contain old base"
+    );
+    let _ = vendor;
+
+    with_cwd(tmp.path(), || {
+        crate::exe::merge_one(&repo, "bwrt", None, false).unwrap();
+    });
+
+    // After the merge, .gitvendors must contain the new (updated) base.
+    let gitvendors_after = std::fs::read_to_string(tmp.path().join(".gitvendors")).unwrap();
+    assert!(
+        !gitvendors_after.contains(&old_base_oid.to_string()),
+        "post-merge .gitvendors must not still contain old base"
+    );
+    // And HEAD commit should have been created (Linear mode).
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let head_parent_id = head.parent(0).unwrap().id();
+    // The commit in HEAD's tree must include the updated .gitvendors.
+    let head_tree = head.tree().unwrap();
+    let gv_entry = head_tree
+        .get_path(std::path::Path::new(".gitvendors"))
+        .unwrap();
+    let gv_blob = repo.find_blob(gv_entry.id()).unwrap();
+    let gv_content = std::str::from_utf8(gv_blob.content()).unwrap();
+    assert!(
+        !gv_content.contains(&old_base_oid.to_string()),
+        "committed .gitvendors must reflect updated base"
+    );
+    let _ = head_parent_id;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for add-invariant tests
+// ---------------------------------------------------------------------------
+
+/// Create a bare upstream repo in a tempdir with the given files committed on
+/// `main`.  Returns `(bare_repo, tempdir)` — keep `tempdir` alive.
+fn make_upstream(files: &[(&str, &[u8])]) -> (git2::Repository, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let bare = git2::Repository::init_bare(tmp.path()).unwrap();
+    {
+        let tree = build_tree(&bare, files);
+        bare.commit(
+            Some("refs/heads/main"),
+            &test_sig(),
+            &test_sig(),
+            "initial",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+    (bare, tmp)
+}
+
+// ---------------------------------------------------------------------------
+// Invariant: overlapping output paths on add
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_add_detects_overlapping_output_paths() {
+    let (repo, tmp) = init_repo_with_gitattributes("");
+
+    // Two upstream repos that both expose a.txt on main.
+    let (_up1, up1_tmp) = make_upstream(&[("a.txt", b"first vendor")]);
+    let (_up2, up2_tmp) = make_upstream(&[("a.txt", b"second vendor")]);
+
+    let url1 = up1_tmp.path().to_str().unwrap().to_string();
+    let url2 = up2_tmp.path().to_str().unwrap().to_string();
+
+    // Add the first vendor successfully.
+    with_cwd(tmp.path(), || {
+        crate::exe::add(&repo, "first", &url1, Some("main"), &["**"], None, None).unwrap();
+    });
+
+    // Adding the second vendor should fail due to overlapping output path a.txt.
+    let result = with_cwd(tmp.path(), || {
+        crate::exe::add(&repo, "second", &url2, Some("main"), &["**"], None, None)
+    });
+    assert!(
+        result.is_err(),
+        "expected error for overlapping output paths"
+    );
+    let msg = result.err().unwrap().to_string();
+    assert!(
+        msg.contains("overlapping output paths"),
+        "expected overlap error; got: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Invariant: collision with existing non-vendored files on add
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_add_detects_collision_with_non_vendored_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    // HEAD contains a plain (non-vendored) file at the path the vendor wants.
+    std::fs::write(tmp.path().join(".gitattributes"), "").unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), b"// existing\n").unwrap();
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "initial with lib.rs",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    }
+
+    // Upstream repo whose main branch also contains lib.rs.
+    let (_upstream, up_tmp) = make_upstream(&[("lib.rs", b"// upstream\n")]);
+    let url = up_tmp.path().to_str().unwrap().to_string();
+
+    let result = with_cwd(tmp.path(), || {
+        crate::exe::add(&repo, "coll", &url, Some("main"), &["**"], None, None)
+    });
+    assert!(
+        result.is_err(),
+        "expected error for collision with non-vendored file"
+    );
+    let msg = result.err().unwrap().to_string();
+    assert!(
+        msg.contains("already exists") && msg.contains("not vendored"),
+        "expected collision error; got: {msg}"
+    );
+}
