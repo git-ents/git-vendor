@@ -1,4 +1,4 @@
-use git_vendor::{CommitMode, Vendor, VendorSource};
+use git_vendor::{CommitMode, VendorSource};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 

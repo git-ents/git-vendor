@@ -1,4 +1,4 @@
-use git_vendor::{Vendor, VendorSource};
+use git_vendor::VendorSource;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 

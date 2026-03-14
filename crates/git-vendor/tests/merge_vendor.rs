@@ -17,7 +17,7 @@ fn test_sig() -> git2::Signature<'static> {
     git2::Signature::now("Test", "test@example.com").unwrap()
 }
 
-fn init_repo_with_gitattributes(
+fn _init_repo_with_gitattributes(
     gitattributes_content: &str,
 ) -> (git2::Repository, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
