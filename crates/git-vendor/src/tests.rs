@@ -59,7 +59,7 @@ fn test_head_ref_simple() {
         base: None,
         patterns: vec![],
     };
-    assert_eq!(vs.head_ref(), "refs/vendor/foo");
+    assert_eq!(vs.head_ref(), "refs/vendor/foo/head");
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn test_head_ref_with_hyphens_and_underscores() {
         base: None,
         patterns: vec![],
     };
-    assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib");
+    assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib/head");
 }
 
 // ---------------------------------------------------------------------------
@@ -566,7 +566,7 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     // Upstream tree has two root-level files.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("a.txt", b"aaa"), ("b.txt", b"bbb")]);
-    commit_tree_to_ref(&repo, "refs/vendor/upstream", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/upstream/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "upstream".into(),
@@ -608,7 +608,7 @@ fn test_track_vendor_pattern_selective_glob() {
         &repo,
         &[("main.rs", b"fn main(){}"), ("README.txt", b"hello")],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/sel", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/sel/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "sel".into(),
@@ -641,7 +641,7 @@ fn test_track_vendor_pattern_nested_directory() {
     // Upstream tree: sub/deep.txt
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("sub/deep.txt", b"deep")]);
-    commit_tree_to_ref(&repo, "refs/vendor/nested", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/nested/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "nested".into(),
@@ -674,7 +674,7 @@ fn test_track_vendor_pattern_deep_pattern() {
     // Upstream tree: lib/foo.c
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("lib/foo.c", b"int main(){}")]);
-    commit_tree_to_ref(&repo, "refs/vendor/pfx", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/pfx/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "pfx".into(),
@@ -710,7 +710,7 @@ fn test_track_vendor_pattern_multiple_globs() {
             ("README.txt", b"hello"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/multi", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/multi/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "multi".into(),
@@ -745,7 +745,7 @@ fn test_track_vendor_pattern_multiple_globs() {
 fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     let (repo, tmp) = init_repo_with_gitattributes("# existing\n");
     let upstream_tree = build_tree(&repo, &[("data.bin", b"\x00\x01")]);
-    commit_tree_to_ref(&repo, "refs/vendor/nomatch", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/nomatch/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "nomatch".into(),
@@ -781,7 +781,7 @@ fn test_track_vendor_pattern_expands_to_per_file() {
             ("README.md", b"# hi"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/expand", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/expand/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "expand".into(),
@@ -852,7 +852,7 @@ fn commit_workdir(
 ///   - `.gitattributes` with `vendor` attrs for given files
 ///   - the vendored files themselves
 ///
-/// Also creates `refs/vendor/<name>` pointing at a commit with the upstream
+/// Also creates `refs/vendor/<name>/head` pointing at a commit with the upstream
 /// tree.
 ///
 /// Returns `(repo, tempdir, vendor_source)`.
@@ -911,7 +911,7 @@ fn setup_merge_scenario(
         let upstream_tree = build_tree(&repo, remote_files);
         commit_tree_to_ref(
             &repo,
-            &format!("refs/vendor/{vendor_name}"),
+            &format!("refs/vendor/{vendor_name}/head"),
             &upstream_tree,
             "upstream tip",
         );
@@ -1002,7 +1002,7 @@ fn test_merge_vendor_with_base_clean_merge() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"line1\nline2\nlineC\n")]);
     commit_tree_to_ref(
         &repo,
-        &format!("refs/vendor/{vendor_name}"),
+        &format!("refs/vendor/{vendor_name}/head"),
         &upstream_tree,
         "upstream change",
     );
@@ -1075,7 +1075,7 @@ fn test_merge_vendor_conflict() {
         let upstream_tree = build_tree(&repo, &[("f.txt", b"upstream change\n")]);
         commit_tree_to_ref(
             &repo,
-            &format!("refs/vendor/{vendor_name}"),
+            &format!("refs/vendor/{vendor_name}/head"),
             &upstream_tree,
             "upstream edit",
         );
@@ -1194,7 +1194,7 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"original\n"), ("b.txt", b"new file\n")]);
     commit_tree_to_ref(
         &repo,
-        &format!("refs/vendor/{vendor_name}"),
+        &format!("refs/vendor/{vendor_name}/head"),
         &upstream_tree,
         "upstream adds b.txt",
     );
@@ -1347,7 +1347,7 @@ fn test_add_vendor_nested_paths_match_correctly() {
 
     // Build upstream tree with a nested file at the same path.
     let upstream_tree = build_tree(&repo, &[("sub/overlap.c", b"// upstream v1")]);
-    commit_tree_to_ref(&repo, "refs/vendor/nested", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/nested/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "nested".into(),
@@ -1584,7 +1584,7 @@ fn test_merge_vendor_new_file_at_mapped_path() {
         .unwrap();
     commit_tree_to_ref(
         &repo,
-        &format!("refs/vendor/{vendor_name}"),
+        &format!("refs/vendor/{vendor_name}/head"),
         &upstream_tree,
         "upstream adds b.rs",
     );
@@ -1639,7 +1639,7 @@ fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
             ("docs/guide.md", b"# Guide"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/mixed", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/mixed/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "mixed".into(),
@@ -1695,7 +1695,7 @@ fn test_add_vendor_glob_filtering_with_mapping() {
             ("other/data.bin", b"\x00\x01\x02"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/filter", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/filter/head", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "filter".into(),

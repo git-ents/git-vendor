@@ -115,7 +115,7 @@ pub enum Command {
     /// Show which vendors have unmerged upstream changes.
     Status,
 
-    /// Clean up refs/vendor/* refs that have no corresponding entry in .gitvendors.
+    /// Clean up refs/vendor/*/head (and /base) refs that have no corresponding entry in .gitvendors.
     Prune,
 
     /// Merge upstream changes for a vendor.

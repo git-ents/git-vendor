@@ -149,6 +149,14 @@ pub fn add(
         updated.to_config(&mut cfg)?;
     }
 
+    // Also write the base commit OID to refs/vendor/<name>/base.
+    repo.reference(
+        &source.base_ref(),
+        vendor_commit.id(),
+        true,
+        "git-vendor: set initial base ref",
+    )?;
+
     // Perform the initial one-time merge using the stored patterns directly,
     // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
     // raw_patterns already carry any colon destination, so pass Path::new(".").
@@ -326,7 +334,7 @@ pub fn status(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error
 }
 
 /// Remove a vendor source: delete its `.gitvendors` entry, remove its
-/// `refs/vendor/<name>` ref, remove matching lines from `.gitattributes`
+/// `refs/vendor/<name>/head` and `refs/vendor/<name>/base` refs, remove matching lines from `.gitattributes`
 /// files, and mark vendored files as "deleted by them" conflicts in the
 /// index.
 ///
@@ -352,8 +360,11 @@ pub fn rm(repo: &Repository, name: &str) -> Result<(), Box<dyn std::error::Error
         remove_vendor_from_gitvendors(&vendors_path, name)?;
     }
 
-    // 2. Delete refs/vendor/<name>.
+    // 2. Delete refs/vendor/<name>/head and refs/vendor/<name>/base.
     if let Ok(mut reference) = repo.find_reference(&vendor.head_ref()) {
+        reference.delete()?;
+    }
+    if let Ok(mut reference) = repo.find_reference(&vendor.base_ref()) {
         reference.delete()?;
     }
 
@@ -450,18 +461,26 @@ pub fn prune(repo: &Repository) -> Result<Vec<String>, Box<dyn std::error::Error
     let known: HashSet<String> = vendors.into_iter().map(|v| v.name).collect();
 
     let mut pruned = Vec::new();
-    for reference in repo.references_glob("refs/vendor/*")? {
+    for reference in repo.references_glob("refs/vendor/*/head")? {
         let reference = reference?;
         let refname = reference.name().unwrap_or("").to_string();
-        let vendor_name = refname.strip_prefix("refs/vendor/").unwrap_or("");
+        // refname is "refs/vendor/<name>/head"
+        let vendor_name = refname
+            .strip_prefix("refs/vendor/")
+            .and_then(|s| s.strip_suffix("/head"))
+            .unwrap_or("");
         if !vendor_name.is_empty() && !known.contains(vendor_name) {
             pruned.push(vendor_name.to_string());
         }
     }
 
     for name in &pruned {
-        let refname = format!("refs/vendor/{}", name);
-        if let Ok(mut r) = repo.find_reference(&refname) {
+        let head_ref = format!("refs/vendor/{}/head", name);
+        if let Ok(mut r) = repo.find_reference(&head_ref) {
+            r.delete()?;
+        }
+        let base_ref = format!("refs/vendor/{}/base", name);
+        if let Ok(mut r) = repo.find_reference(&base_ref) {
             r.delete()?;
         }
     }
@@ -553,7 +572,7 @@ fn remove_vendor_attrs(workdir: &Path, name: &str) -> Result<(), Box<dyn std::er
 
 /// Result of a single vendor merge.
 pub enum MergeOutcome {
-    /// The vendor's `base` already matches the latest `refs/vendor/$name`.
+    /// The vendor's `base` already matches the latest `refs/vendor/$name/head`.
     /// Nothing was changed.
     UpToDate {
         /// The vendor source (unchanged).
@@ -707,6 +726,14 @@ fn merge_vendor(
         let mut cfg = repo.vendor_config()?;
         updated.to_config(&mut cfg)?;
     }
+
+    // Also write the base commit OID to refs/vendor/<name>/base.
+    repo.reference(
+        &vendor.base_ref(),
+        vendor_commit.id(),
+        true,
+        "git-vendor: update base ref",
+    )?;
 
     let merged_index = repo.merge_vendor(vendor, None, file_favor)?;
 

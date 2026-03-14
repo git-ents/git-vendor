@@ -359,7 +359,12 @@ impl VendorSource {
 
     /// The ref holding the latest fetched upstream tip.
     pub fn head_ref(&self) -> String {
-        format!("refs/vendor/{}", self.name)
+        format!("refs/vendor/{}/head", self.name)
+    }
+
+    /// The ref recording the last-merged upstream commit (the merge base).
+    pub fn base_ref(&self) -> String {
+        format!("refs/vendor/{}/base", self.name)
     }
 
     /// The ref to track.
@@ -451,7 +456,7 @@ pub trait Vendor {
         path: &Path,
     ) -> Result<(), git2::Error>;
 
-    /// Fetch the upstream for the given vendor and advance `refs/vendor/$name`.
+    /// Fetch the upstream for the given vendor and advance `refs/vendor/$name/head`.
     /// Returns the updated reference.
     fn fetch_vendor<'a>(
         &'a self,
@@ -484,7 +489,7 @@ pub trait Vendor {
     /// If a `base` exists in the vendor source provided (by `name`),
     /// initiate a three-way merge with the base reference, the
     /// commit provided (defaulting to the repository's `HEAD`),
-    /// and the tip of `refs/vendor/{name}`. If no `base` exists,
+    /// and the tip of `refs/vendor/{name}/head`. If no `base` exists,
     /// then a two-way merge is performed and a new `base` is written
     /// to the the returned `VendorSource`.
     fn merge_vendor(
