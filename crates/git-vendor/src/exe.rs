@@ -10,6 +10,7 @@ use crate::PatternMapping;
 use crate::Vendor;
 use crate::VendorSource;
 
+use crate::apply_pattern_mappings;
 use crate::parse_patterns;
 use crate::remap_upstream_tree;
 
@@ -312,6 +313,37 @@ pub fn track_patterns(
 
     let mut cfg = repo.vendor_config()?;
     vendor.to_config(&mut cfg)?;
+
+    // Walk HEAD and attribute any local files that match the new patterns.
+    // Stage .gitattributes immediately so the index reflects the new entries
+    // before a merge (which uses INDEX_ONLY lookup).
+    if let Ok(head_tree) = repo.head().and_then(|r| r.peel_to_tree()) {
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+        let gitattributes = workdir.join(".gitattributes");
+        let vendor_attr = format!("vendor={}", vendor.name);
+        let new_mappings =
+            parse_patterns(&patterns.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+
+        head_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() != Some(git2::ObjectType::Blob) {
+                return git2::TreeWalkResult::Ok;
+            }
+            let local_path = format!("{}{}", dir, entry.name().unwrap_or(""));
+            if apply_pattern_mappings(&new_mappings, &local_path).is_some() {
+                let _ = repo.set_attr(&local_path, &[&vendor_attr], &gitattributes);
+            }
+            git2::TreeWalkResult::Ok
+        })?;
+
+        if gitattributes.exists() {
+            let mut index = repo.index()?;
+            index.add_path(std::path::Path::new(".gitattributes"))?;
+            index.write()?;
+        }
+    }
+
     Ok(())
 }
 
