@@ -127,7 +127,10 @@ pub fn parse_patterns(raws: &[impl AsRef<str>]) -> Vec<PatternMapping> {
 /// `upstream_path`, and return the computed local path.
 ///
 /// Returns `None` if no pattern matches.
-fn apply_pattern_mappings(mappings: &[PatternMapping], upstream_path: &str) -> Option<String> {
+pub(crate) fn apply_pattern_mappings(
+    mappings: &[PatternMapping],
+    upstream_path: &str,
+) -> Option<String> {
     for mapping in mappings {
         let glob = if mapping.glob.ends_with('/') {
             format!("{}**", mapping.glob)

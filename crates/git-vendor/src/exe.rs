@@ -9,6 +9,7 @@ use crate::CommitMode;
 use crate::PatternMapping;
 use crate::Vendor;
 use crate::VendorSource;
+
 use crate::parse_patterns;
 use crate::remap_upstream_tree;
 
@@ -156,9 +157,6 @@ pub fn add(
     // Fetch upstream.
     repo.fetch_vendor(&source, None)?;
 
-    // Track the stored patterns in .gitattributes.
-    repo.track_vendor_pattern(&source)?;
-
     // Update base in .gitvendors to the current upstream tip.
     let vendor_ref = repo.find_reference(&source.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
@@ -182,6 +180,96 @@ pub fn add(
         true,
         "git-vendor: set initial base ref",
     )?;
+
+    // Check for overlapping output paths with already-configured vendors.
+    {
+        let existing = repo.list_vendors().unwrap_or_default();
+        let new_mappings = parse_patterns(&updated.patterns);
+
+        // Collect all local paths this new vendor would produce.
+        let upstream_tree = repo.find_reference(&source.head_ref())?.peel_to_tree()?;
+        let mut new_paths: HashSet<String> = HashSet::new();
+        upstream_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() != Some(git2::ObjectType::Blob) {
+                return git2::TreeWalkResult::Ok;
+            }
+            let up = format!("{}{}", dir, entry.name().unwrap_or(""));
+            if let Some(local) = crate::apply_pattern_mappings(&new_mappings, &up) {
+                new_paths.insert(local);
+            }
+            git2::TreeWalkResult::Ok
+        })?;
+
+        // Check against every other vendor's output paths.
+        for other in &existing {
+            if other.name == name {
+                continue;
+            }
+            let other_mappings = parse_patterns(&other.patterns);
+            if let Ok(other_ref) = repo.find_reference(&other.head_ref()) {
+                if let Ok(other_tree) = other_ref.peel_to_tree() {
+                    other_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+                        if entry.kind() != Some(git2::ObjectType::Blob) {
+                            return git2::TreeWalkResult::Ok;
+                        }
+                        let up = format!("{}{}", dir, entry.name().unwrap_or(""));
+                        if let Some(local) = crate::apply_pattern_mappings(&other_mappings, &up) {
+                            if new_paths.contains(&local) {
+                                // Signal overlap via a sentinel path so we can
+                                // detect it after the walk (walks can't early-exit
+                                // with an error).
+                                new_paths.insert(format!("\x00overlap:{}", local));
+                            }
+                        }
+                        git2::TreeWalkResult::Ok
+                    })?;
+                    for path in &new_paths {
+                        if let Some(overlap) = path.strip_prefix("\x00overlap:") {
+                            return Err(format!(
+                                "vendor '{}' and '{}' both map to output path '{}'; \
+                                 overlapping output paths are not allowed",
+                                name, other.name, overlap
+                            )
+                            .into());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for collision with existing non-vendored files in HEAD.
+        if let Ok(head_commit) = repo.head().and_then(|h| h.peel_to_commit()) {
+            if let Ok(head_tree) = head_commit.tree() {
+                for local_path in &new_paths {
+                    if local_path.starts_with('\x00') {
+                        continue;
+                    }
+                    if head_tree.get_path(Path::new(local_path)).is_ok() {
+                        // File exists in HEAD — check if it belongs to another vendor.
+                        let attr = repo.get_attr(
+                            Path::new(local_path),
+                            "vendor",
+                            git2::AttrCheckFlags::FILE_THEN_INDEX,
+                        );
+                        match attr {
+                            Ok(Some(_)) => {} // already vendored, ok
+                            _ => {
+                                return Err(format!(
+                                    "file '{}' already exists and is not vendored; \
+                                     cannot add vendor '{}' without first removing it",
+                                    local_path, name
+                                )
+                                .into());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Track the stored patterns in .gitattributes.
+    repo.track_vendor_pattern(&source)?;
 
     // Perform the initial one-time merge using the stored patterns directly,
     // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
@@ -824,7 +912,9 @@ fn merge_vendor(
         .as_deref()
         .and_then(|b| git2::Oid::from_str(b).ok());
 
-    // Always update base in .gitvendors to the current upstream tip.
+    // Build the updated VendorSource with the new base, but do NOT write it
+    // to .gitvendors yet — that happens only after a successful commit or
+    // staging (invariant: base is written only on success).
     let updated = VendorSource {
         name: vendor.name.clone(),
         url: vendor.url.clone(),
@@ -833,18 +923,6 @@ fn merge_vendor(
         commit: vendor.commit.clone(),
         patterns: vendor.patterns.clone(),
     };
-    {
-        let mut cfg = repo.vendor_config()?;
-        updated.to_config(&mut cfg)?;
-    }
-
-    // Also write the base commit OID to refs/vendor/<name>/base.
-    repo.reference(
-        &vendor.base_ref(),
-        vendor_commit.id(),
-        true,
-        "git-vendor: update base ref",
-    )?;
 
     let merged_index = repo.merge_vendor(vendor, None, file_favor)?;
 
@@ -853,6 +931,24 @@ fn merge_vendor(
     repo.refresh_vendor_attrs(vendor, &merged_index, Path::new("."))?;
 
     let outcome = checkout_and_stage(repo, merged_index, updated)?;
+
+    // Write base to .gitvendors and advance refs/vendor/<name>/base now that
+    // the working tree and index are in a consistent state.  This covers both
+    // clean merges (committed or staged) and conflicts (staged for resolution).
+    {
+        let mut cfg = repo.vendor_config()?;
+        let updated_vendor = match &outcome {
+            MergeOutcome::Clean { vendor } | MergeOutcome::Conflict { vendor, .. } => vendor,
+            MergeOutcome::UpToDate { .. } => unreachable!(),
+        };
+        updated_vendor.to_config(&mut cfg)?;
+    }
+    repo.reference(
+        &vendor.base_ref(),
+        vendor_commit.id(),
+        true,
+        "git-vendor: update base ref",
+    )?;
 
     // Stage metadata files that checkout_and_stage does not cover.
     let mut repo_index = repo.index()?;
