@@ -137,9 +137,9 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
         .unwrap();
     }
 
-    let mut merged_index = git2::Index::new().unwrap();
+    let mut theirs_index = git2::Index::new().unwrap();
     let blob_oid = repo.blob(b"hello").unwrap();
-    merged_index
+    theirs_index
         .add(&git2::IndexEntry {
             ctime: git2::IndexTime::new(0, 0),
             mtime: git2::IndexTime::new(0, 0),
@@ -155,6 +155,8 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
             path: b"sub/file.txt".to_vec(),
         })
         .unwrap();
+    let theirs_tree_oid = theirs_index.write_tree_to(&repo).unwrap();
+    let theirs_tree = repo.find_tree(theirs_tree_oid).unwrap();
 
     let vendor = VendorSource {
         name: "fwdslash".into(),
@@ -166,7 +168,7 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("."))
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree, Path::new("."))
             .unwrap();
     });
 
@@ -376,7 +378,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
         .unwrap();
     }
 
-    let mut merged_index = git2::Index::new().unwrap();
+    let mut theirs_index = git2::Index::new().unwrap();
     for (path, content) in [
         (".config/committed.toml", b"c" as &[u8]),
         (".config/deny.toml", b"d"),
@@ -384,7 +386,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
         (".github/workflows/CI.yml", b"ci"),
     ] {
         let blob_oid = repo.blob(content).unwrap();
-        merged_index
+        theirs_index
             .add(&git2::IndexEntry {
                 ctime: git2::IndexTime::new(0, 0),
                 mtime: git2::IndexTime::new(0, 0),
@@ -401,6 +403,8 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
             })
             .unwrap();
     }
+    let theirs_tree_oid = theirs_index.write_tree_to(&repo).unwrap();
+    let theirs_tree = repo.find_tree(theirs_tree_oid).unwrap();
 
     let vendor = VendorSource {
         name: "myvendor".into(),
@@ -412,7 +416,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("."))
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree, Path::new("."))
             .unwrap();
     });
 
@@ -430,7 +434,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     );
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &merged_index, Path::new("."))
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree, Path::new("."))
             .unwrap();
     });
 

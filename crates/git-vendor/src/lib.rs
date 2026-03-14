@@ -416,7 +416,7 @@ pub trait Vendor {
     fn refresh_vendor_attrs(
         &self,
         vendor: &VendorSource,
-        merged_index: &git2::Index,
+        theirs_tree: &git2::Tree,
         path: &Path,
     ) -> Result<(), git2::Error>;
 
@@ -668,60 +668,34 @@ impl Vendor for Repository {
     fn refresh_vendor_attrs(
         &self,
         vendor: &VendorSource,
-        merged_index: &git2::Index,
+        theirs_tree: &git2::Tree,
         _path: &Path,
     ) -> Result<(), git2::Error> {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        // Always use the root .gitattributes regardless of `_path`.
-        // The `_path` parameter is retained for API compatibility; the actual
-        // per-file paths are taken directly from the merged index entries.
         let gitattributes = workdir.join(".gitattributes");
         let vendor_attr = format!("vendor={}", vendor.name);
 
-        // Collect all stage-0 paths from the merged index that belong to this
-        // vendor.  We identify them by the `vendor` gitattribute (or by
-        // checking if the path appears in the remapped tree when no attr yet).
-        let expected_vendor = vendor.name.clone();
-        let mut merged_paths: HashSet<String> = HashSet::new();
-        for entry in merged_index.iter() {
-            let stage = (entry.flags >> 12) & 0x3;
-            if stage != 0 {
-                continue;
+        // The authoritative set of vendor-owned paths is exactly the files
+        // present in the remapped upstream tree (theirs_tree).  Patterns
+        // already filtered this tree, so every entry here belongs to this
+        // vendor; files absent from it should not be attributed.
+        let mut owned_paths: HashSet<String> = HashSet::new();
+        theirs_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if entry.kind() != Some(git2::ObjectType::Blob) {
+                return git2::TreeWalkResult::Ok;
             }
-            if let Ok(entry_path) = std::str::from_utf8(&entry.path) {
-                // Include paths already attributed to this vendor in HEAD,
-                // plus any new path that was brought in by the merge
-                // (detected by checking the gitattr on the merged result –
-                // which may not yet be set for brand-new files, so we
-                // include all stage-0 entries and let the attribute file
-                // be the source of truth going forward).
-                merged_paths.insert(entry_path.to_string());
+            if let Some(name) = entry.name() {
+                let path = if dir.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{}{}", dir, name)
+                };
+                owned_paths.insert(path);
             }
-        }
-
-        // Filter to only paths that are (or should be) owned by this vendor.
-        // Strategy: a path belongs to this vendor if:
-        //   (a) it already carries `vendor=<name>` in HEAD's gitattributes, OR
-        //   (b) it is a new file not yet attributed (we conservatively include
-        //       all stage-0 entries from the merge result and trust that the
-        //       caller only invokes refresh_vendor_attrs with a properly-scoped
-        //       merged_index).
-        let owned_paths: HashSet<String> = merged_paths
-            .into_iter()
-            .filter(|path| {
-                match self.get_attr(
-                    Path::new(path),
-                    "vendor",
-                    git2::AttrCheckFlags::FILE_THEN_INDEX,
-                ) {
-                    Ok(Some(value)) => value == expected_vendor,
-                    // New file not yet attributed – include it.
-                    _ => true,
-                }
-            })
-            .collect();
+            git2::TreeWalkResult::Ok
+        })?;
 
         // Read existing root .gitattributes, remove stale entries for this
         // vendor, keep everything else.

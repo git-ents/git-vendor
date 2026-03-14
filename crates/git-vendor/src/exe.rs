@@ -924,11 +924,34 @@ fn merge_vendor(
         patterns: vendor.patterns.clone(),
     };
 
-    let merged_index = repo.merge_vendor(vendor, None, file_favor)?;
+    let mut merged_index = repo.merge_vendor(vendor, None, file_favor)?;
 
     // Refresh .gitattributes: add entries for new upstream files, remove
-    // entries for files deleted upstream.
-    repo.refresh_vendor_attrs(vendor, &merged_index, Path::new("."))?;
+    // entries for files deleted upstream.  Use the pattern-filtered upstream
+    // tree as the authoritative source of which files belong to this vendor.
+    let upstream_tree = repo.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+    let mappings = parse_patterns(&vendor.patterns);
+    let theirs_remapped = remap_upstream_tree(&repo, &upstream_tree, &mappings)?;
+    repo.refresh_vendor_attrs(vendor, &theirs_remapped, Path::new("."))?;
+
+    // Remove any entry from the merged index whose path is not already
+    // attributed to this vendor in HEAD.  New upstream files that match
+    // patterns but have never been attributed must not be introduced into
+    // the working tree automatically.
+    let expected_vendor = vendor.name.clone();
+    let paths_to_remove: Vec<String> = merged_index
+        .iter()
+        .filter_map(|entry| std::str::from_utf8(&entry.path).ok().map(String::from))
+        .filter(|path| {
+            match repo.get_attr(Path::new(path), "vendor", git2::AttrCheckFlags::INDEX_ONLY) {
+                Ok(Some(value)) => value != expected_vendor,
+                _ => true,
+            }
+        })
+        .collect();
+    for path in &paths_to_remove {
+        let _ = merged_index.remove_path(Path::new(path));
+    }
 
     let outcome = checkout_and_stage(repo, merged_index, updated)?;
 
