@@ -90,9 +90,10 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 for v in &vendors {
                     let branch = v.branch.as_deref().unwrap_or("(default)");
                     let base = v.base.as_deref().unwrap_or("(none)");
+                    let path = v.path.as_deref().unwrap_or("(root)");
                     println!(
-                        "{}\n  url:    {}\n  branch: {}\n  base:   {}",
-                        v.name, v.url, branch, base,
+                        "{}\n  url:    {}\n  branch: {}\n  base:   {}\n  path:   {}",
+                        v.name, v.url, branch, base, path,
                     );
                 }
             }

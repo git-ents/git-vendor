@@ -300,6 +300,9 @@ pub struct VendorSource {
     /// it is assumed that no prior merge has taken
     /// place and conflicts must be resolved manually.
     pub base: Option<String>,
+    /// Local directory where vendored files are placed.
+    /// `None` means files are placed at the repo root (no remapping).
+    pub path: Option<String>,
     /// Glob pattern(s) selecting which upstream files to vendor.
     pub patterns: Vec<String>,
 }
@@ -314,6 +317,10 @@ impl VendorSource {
 
         if let Some(base) = &self.base {
             cfg.set_str(&format!("vendor.{}.base", &self.name), base)?;
+        }
+
+        if let Some(path) = &self.path {
+            cfg.set_str(&format!("vendor.{}.path", &self.name), path)?;
         }
 
         // Remove existing pattern entries before writing the current set.
@@ -337,6 +344,7 @@ impl VendorSource {
         let url = cfg.get_string(&format!("vendor.{name}.url"))?;
         let branch = cfg.get_string(&format!("vendor.{name}.branch")).ok();
         let base = cfg.get_string(&format!("vendor.{name}.base")).ok();
+        let path = cfg.get_string(&format!("vendor.{name}.path")).ok();
 
         let mut patterns = Vec::new();
         let pattern_entries = cfg.multivar(&format!("vendor.{name}.pattern"), None);
@@ -353,6 +361,7 @@ impl VendorSource {
             url,
             branch,
             base,
+            path,
             patterns,
         }))
     }
@@ -374,6 +383,27 @@ impl VendorSource {
             None => "HEAD".into(),
         }
     }
+}
+
+/// Build `PatternMapping`s for a vendor by combining its plain-glob patterns
+/// with its `path` as the destination prefix.
+fn mappings_for_vendor(vendor: &VendorSource) -> Vec<PatternMapping> {
+    let dest: Option<String> = vendor.path.as_deref().and_then(|p| {
+        let s = p.trim_end_matches('/');
+        if s.is_empty() || s == "." {
+            None
+        } else {
+            Some(format!("{}/", s))
+        }
+    });
+    vendor
+        .patterns
+        .iter()
+        .map(|glob| PatternMapping {
+            glob: glob.clone(),
+            destination: dest.clone(),
+        })
+        .collect()
 }
 
 fn vendors_from_config(cfg: &git2::Config) -> Result<Vec<VendorSource>, git2::Error> {
@@ -428,20 +458,9 @@ pub trait Vendor {
 
     /// Track vendor pattern(s) by writing per-file gitattributes lines with the `vendor` attribute.
     ///
-    /// `globs` selects which upstream files to track.  `path` is the local
-    /// directory under which the vendored files will live; it acts as the
-    /// destination prefix for each glob.  Use `Path::new(".")` when the files
-    /// are placed at the repository root.
-    ///
-    /// Patterns that already carry an explicit colon mapping (e.g. `src/**:ext/`)
-    /// are stored as-is in [`VendorSource::patterns`] and are interpreted by
-    /// the internal [`PatternMapping`] machinery when `path` is `"."`.
-    fn track_vendor_pattern(
-        &self,
-        vendor: &VendorSource,
-        globs: &[&str],
-        path: &Path,
-    ) -> Result<(), git2::Error>;
+    /// Uses `vendor.patterns` and `vendor.path` to determine which upstream
+    /// files to attribute and where they land (by default) locally.
+    fn track_vendor_pattern(&self, vendor: &VendorSource) -> Result<(), git2::Error>;
 
     /// Refresh `.gitattributes` after a merge so that per-file entries match
     /// the merged result.  New upstream files get entries; deleted files lose
@@ -467,22 +486,16 @@ pub trait Vendor {
     /// Perform the initial add of a vendor source.
     ///
     /// Unlike `merge_vendor`, which relies on files already present in HEAD to
-    /// determine the upstream ↔ local mapping, `add_vendor` uses the given
-    /// `globs` and `path` to filter and place the upstream tree directly.  This
+    /// determine the upstream ↔ local mapping, `add_vendor` uses `vendor.patterns`
+    /// and `vendor.path` to filter and place the upstream tree directly.  This
     /// makes it suitable for the first-time add where no vendor files exist in
     /// HEAD yet.
-    ///
-    /// `globs` may contain plain glob strings or strings with the colon mapping
-    /// syntax (e.g. `src/**:ext/`); see [`PatternMapping`].  When a plain glob
-    /// is given, `path` acts as the destination prefix.
     ///
     /// The resulting `git2::Index` contains the merged entries ready to be
     /// written to the working tree and staged.
     fn add_vendor(
         &self,
         vendor: &VendorSource,
-        globs: &[&str],
-        path: &Path,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error>;
 
@@ -630,12 +643,7 @@ impl Vendor for Repository {
         Ok(updates)
     }
 
-    fn track_vendor_pattern(
-        &self,
-        vendor: &VendorSource,
-        globs: &[&str],
-        path: &Path,
-    ) -> Result<(), git2::Error> {
+    fn track_vendor_pattern(&self, vendor: &VendorSource) -> Result<(), git2::Error> {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
@@ -644,10 +652,7 @@ impl Vendor for Repository {
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
         let vendor_attr = format!("vendor={}", vendor.name);
 
-        // Convert (globs, path) to PatternMappings.
-        // Each glob may already carry colon syntax (e.g. "src/**:ext/"); if so,
-        // parse it directly.  Otherwise apply `path` as the destination prefix.
-        let mappings = globs_and_path_to_mappings(globs, path);
+        let mappings = mappings_for_vendor(vendor);
 
         // Collect (local_path) for each upstream file matched by any mapping.
         let mut matched_local_paths: Vec<String> = Vec::new();
@@ -673,12 +678,9 @@ impl Vendor for Repository {
     fn add_vendor(
         &self,
         vendor: &VendorSource,
-        globs: &[&str],
-        path: &Path,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        // Convert (globs, path) to PatternMappings.
-        let mappings = globs_and_path_to_mappings(globs, path);
+        let mappings = mappings_for_vendor(vendor);
 
         // Build the remapped upstream tree: each upstream file is placed at its
         // local (mapped) path according to the pattern mappings.
@@ -724,8 +726,7 @@ impl Vendor for Repository {
         _maybe_opts: Option<&mut git2::FetchOptions>,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        // Parse stored patterns into mappings (supports colon syntax).
-        let mappings = parse_patterns(&vendor.patterns);
+        let mappings = mappings_for_vendor(vendor);
 
         // UPSTREAM (theirs): remap the upstream tree to local paths via mappings.
         let upstream_tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;

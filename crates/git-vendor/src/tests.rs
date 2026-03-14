@@ -57,6 +57,7 @@ fn test_head_ref_simple() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/foo/head");
@@ -69,6 +70,7 @@ fn test_head_ref_with_hyphens_and_underscores() {
         url: "https://example.com/lib.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib/head");
@@ -85,6 +87,7 @@ fn test_tracking_branch_defaults_to_head() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "HEAD");
@@ -97,6 +100,7 @@ fn test_tracking_branch_uses_explicit_branch() {
         url: "https://example.com/foo.git".into(),
         branch: Some("main".into()),
         base: None,
+        path: None,
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "main");
@@ -109,6 +113,7 @@ fn test_tracking_branch_arbitrary_name() {
         url: "https://example.com/foo.git".into(),
         branch: Some("release/v2".into()),
         base: None,
+        path: None,
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "release/v2");
@@ -126,6 +131,7 @@ fn test_to_config_url_only() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -147,6 +153,7 @@ fn test_to_config_with_branch() {
         url: "https://example.com/bar.git".into(),
         branch: Some("develop".into()),
         base: None,
+        path: None,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -167,6 +174,7 @@ fn test_to_config_with_base() {
         url: "https://example.com/baz.git".into(),
         branch: None,
         base: Some("cafebabe".into()),
+        path: None,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -187,6 +195,7 @@ fn test_to_config_all_fields() {
         url: "https://example.com/full.git".into(),
         branch: Some("stable".into()),
         base: Some("deadbeef".into()),
+        path: None,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -303,6 +312,7 @@ fn test_config_roundtrip_full() {
         url: "https://example.com/roundtrip.git".into(),
         branch: Some("main".into()),
         base: Some("abc123def456".into()),
+        path: None,
         patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
@@ -326,6 +336,7 @@ fn test_config_roundtrip_optional_fields_absent() {
         url: "https://example.com/minimal.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec![],
     };
     original.to_config(&mut cfg).unwrap();
@@ -347,6 +358,7 @@ fn test_config_roundtrip_patterns_update() {
         url: "https://example.com/pat.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
@@ -573,14 +585,13 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("lib".into()),
+        patterns: vec!["*.txt".into()],
     };
 
-    // Pattern "*.txt:lib/" maps upstream "a.txt" → "lib/a.txt".
-    // Passing path="." so the colon syntax in the glob is honored.
+    // Pattern "*.txt" with path "lib" maps upstream "a.txt" → "lib/a.txt".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.txt:lib/"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     // Attrs are written to the root .gitattributes.
@@ -615,13 +626,13 @@ fn test_track_vendor_pattern_selective_glob() {
         url: "https://example.com/sel.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("src".into()),
+        patterns: vec!["*.rs".into()],
     };
 
-    // Pattern "*.rs:src/" maps upstream "main.rs" → "src/main.rs".
+    // Pattern "*.rs" with path "src" maps upstream "main.rs" → "src/main.rs".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs:src/"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -648,14 +659,14 @@ fn test_track_vendor_pattern_nested_directory() {
         url: "https://example.com/nested.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("vendor".into()),
+        patterns: vec!["sub/".into()],
     };
 
-    // Pattern "sub/:vendor/" strips "sub/" and prepends "vendor/".
+    // Pattern "sub/" with path "vendor" strips "sub/" and prepends "vendor/".
     // upstream "sub/deep.txt" → "vendor/deep.txt".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["sub/:vendor/"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -681,14 +692,15 @@ fn test_track_vendor_pattern_deep_pattern() {
         url: "https://example.com/pfx.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("third_party".into()),
+        patterns: vec!["**/*.c".into()],
     };
 
-    // Pattern "**/*.c:third_party/" – no prefix stripped (** has empty literal prefix),
-    // destination "third_party/" prepended. upstream "lib/foo.c" → "third_party/lib/foo.c".
+    // Pattern "**/*.c" with path "third_party" – no prefix stripped (** has empty
+    // literal prefix), destination "third_party/" prepended.
+    // upstream "lib/foo.c" → "third_party/lib/foo.c".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["**/*.c:third_party/"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -717,13 +729,13 @@ fn test_track_vendor_pattern_multiple_globs() {
         url: "https://example.com/multi.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("lib".into()),
+        patterns: vec!["*.rs".into(), "*.toml".into()],
     };
 
-    // Two patterns, both mapping to "lib/".
+    // Two patterns with path "lib", both mapping to "lib/".
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs:lib/", "*.toml:lib/"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -752,13 +764,13 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
         url: "https://example.com/nomatch.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("src".into()),
+        patterns: vec!["*.rs".into()],
     };
 
     // No upstream files match "*.rs" so nothing should be written.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["*.rs:src/"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -788,13 +800,13 @@ fn test_track_vendor_pattern_expands_to_per_file() {
         url: "https://example.com/expand.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: None,
+        patterns: vec!["**/*.txt".into()],
     };
 
-    // No colon → no remapping, files keep their upstream paths.
+    // No path → no remapping, files keep their upstream paths.
     with_cwd(tmp.path(), || {
-        repo.track_vendor_pattern(&vendor, &["**/*.txt"], Path::new("."))
-            .unwrap();
+        repo.track_vendor_pattern(&vendor).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -922,6 +934,7 @@ fn setup_merge_scenario(
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: patterns.iter().map(|s| s.to_string()).collect(),
     };
 
@@ -1026,6 +1039,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
+        path: None,
         patterns: vec!["**".into()],
     };
 
@@ -1093,6 +1107,7 @@ fn test_merge_vendor_conflict() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
+        path: None,
         patterns: vec!["**".into()],
     };
 
@@ -1216,6 +1231,7 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
+        path: None,
         patterns: vec!["**".into()],
     };
 
@@ -1295,6 +1311,7 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
         url: "https://example.com/fwdslash.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec!["**".into()],
     };
 
@@ -1354,15 +1371,14 @@ fn test_add_vendor_nested_paths_match_correctly() {
         url: "https://example.com/nested.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: None,
+        patterns: vec!["sub/".into()],
     };
 
     with_cwd(tmp.path(), || {
-        // Pattern "sub/" without a destination: matches files under sub/, keeps their
+        // Pattern "sub/" without a path: matches files under sub/, keeps their
         // full upstream paths (sub/overlap.c stays at sub/overlap.c).
-        let index = repo
-            .add_vendor(&vendor, &["sub/"], Path::new("."), None)
-            .unwrap();
+        let index = repo.add_vendor(&vendor, None).unwrap();
 
         // The merge should detect both sides and produce a result containing
         // the nested path (possibly conflicted, but present).
@@ -1497,44 +1513,6 @@ fn test_local_path_docs_to_upstream() {
 }
 
 // ---------------------------------------------------------------------------
-// apply_default_path tests (via exe::add_default_path)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_apply_default_path_no_path() {
-    use crate::exe::apply_default_path_pub;
-    let patterns = ["src/**", "docs/**"];
-    let result = apply_default_path_pub(&patterns, None);
-    assert_eq!(result, vec!["src/**", "docs/**"]);
-}
-
-#[test]
-fn test_apply_default_path_with_path() {
-    use crate::exe::apply_default_path_pub;
-    let patterns = ["src/**", "docs/**"];
-    let result = apply_default_path_pub(&patterns, Some(std::path::Path::new("ext")));
-    assert_eq!(result, vec!["src/**:ext/", "docs/**:ext/"]);
-}
-
-#[test]
-fn test_apply_default_path_does_not_override_explicit_mapping() {
-    use crate::exe::apply_default_path_pub;
-    // Pattern already has an explicit destination → left alone.
-    let patterns = ["src/**:custom/", "docs/**"];
-    let result = apply_default_path_pub(&patterns, Some(std::path::Path::new("ext")));
-    assert_eq!(result, vec!["src/**:custom/", "docs/**:ext/"]);
-}
-
-#[test]
-fn test_apply_default_path_dot_path_is_noop() {
-    use crate::exe::apply_default_path_pub;
-    // Path "." means "same as omitting --path".
-    let patterns = ["src/**"];
-    let result = apply_default_path_pub(&patterns, Some(std::path::Path::new(".")));
-    assert_eq!(result, vec!["src/**"]);
-}
-
-// ---------------------------------------------------------------------------
 // merge_vendor – path-mapped integration tests
 // ---------------------------------------------------------------------------
 
@@ -1589,13 +1567,14 @@ fn test_merge_vendor_new_file_at_mapped_path() {
         "upstream adds b.rs",
     );
 
-    // Pattern "src/**:ext/" – upstream files under src/ land under ext/.
+    // Pattern "src/**" with path "ext" – upstream files under src/ land under ext/.
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_commit.to_string()),
-        patterns: vec!["src/**:ext/".to_string()],
+        path: Some("ext".into()),
+        patterns: vec!["src/**".to_string()],
     };
 
     let idx = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1646,34 +1625,28 @@ fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
         url: "https://example.com/mixed.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("ext".into()),
+        patterns: vec!["src/**".into(), "docs/**".into()],
     };
 
     with_cwd(tmp.path(), || {
-        // "src/**:ext/src/" remaps: src/main.rs → ext/src/main.rs
-        // "docs/**" (no mapping): docs/guide.md → docs/guide.md
-        let index = repo
-            .add_vendor(
-                &vendor,
-                &["src/**:ext/src/", "docs/**"],
-                Path::new("."),
-                None,
-            )
-            .unwrap();
+        // "src/**" with path "ext": src/main.rs → strips "src/" → main.rs → ext/main.rs
+        // "docs/**" with path "ext": docs/guide.md → strips "docs/" → guide.md → ext/guide.md
+        let index = repo.add_vendor(&vendor, None).unwrap();
         let paths: Vec<String> = index
             .iter()
             .filter(|e| (e.flags >> 12) & 0x3 == 0)
             .map(|e| String::from_utf8_lossy(&e.path).to_string())
             .collect();
         assert!(
-            paths.contains(&"ext/src/main.rs".to_string()),
-            "src/main.rs should be remapped to ext/src/main.rs, got: {paths:?}"
+            paths.contains(&"ext/main.rs".to_string()),
+            "src/main.rs should be remapped to ext/main.rs, got: {paths:?}"
         );
         assert!(
-            paths.contains(&"docs/guide.md".to_string()),
-            "docs/guide.md should keep its upstream path, got: {paths:?}"
+            paths.contains(&"ext/guide.md".to_string()),
+            "docs/guide.md should be remapped to ext/guide.md, got: {paths:?}"
         );
-        // Raw upstream path must not appear.
+        // Raw upstream paths must not appear.
         assert!(
             !paths.contains(&"src/main.rs".to_string()),
             "raw src/main.rs must not appear in merge index, got: {paths:?}"
@@ -1702,15 +1675,14 @@ fn test_add_vendor_glob_filtering_with_mapping() {
         url: "https://example.com/filter.git".into(),
         branch: None,
         base: None,
-        patterns: vec![],
+        path: Some("ext".into()),
+        patterns: vec!["src/**/*.rs".into()],
     };
 
     with_cwd(tmp.path(), || {
-        // "src/**/*.rs:ext/" – literal prefix is "src/", so "src/lib.rs" → "lib.rs",
-        // then prepend "ext/" → "ext/lib.rs".
-        let index = repo
-            .add_vendor(&vendor, &["src/**/*.rs:ext/"], Path::new("."), None)
-            .unwrap();
+        // "src/**/*.rs" with path "ext" – literal prefix is "src/", so
+        // "src/lib.rs" → strips "src/" → "lib.rs" → prepend "ext/" → "ext/lib.rs".
+        let index = repo.add_vendor(&vendor, None).unwrap();
         let paths: Vec<String> = index
             .iter()
             .filter(|e| (e.flags >> 12) & 0x3 == 0)
@@ -1812,6 +1784,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
         url: "https://example.com/myvendor.git".into(),
         branch: None,
         base: None,
+        path: None,
         patterns: vec!["**".into()],
     };
 
