@@ -57,7 +57,7 @@ fn test_head_ref_simple() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/foo/head");
@@ -70,7 +70,7 @@ fn test_head_ref_with_hyphens_and_underscores() {
         url: "https://example.com/lib.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib/head");
@@ -87,7 +87,7 @@ fn test_tracking_branch_defaults_to_head() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "HEAD");
@@ -100,7 +100,7 @@ fn test_tracking_branch_uses_explicit_branch() {
         url: "https://example.com/foo.git".into(),
         branch: Some("main".into()),
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "main");
@@ -113,7 +113,7 @@ fn test_tracking_branch_arbitrary_name() {
         url: "https://example.com/foo.git".into(),
         branch: Some("release/v2".into()),
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "release/v2");
@@ -131,7 +131,7 @@ fn test_to_config_url_only() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -153,7 +153,7 @@ fn test_to_config_with_branch() {
         url: "https://example.com/bar.git".into(),
         branch: Some("develop".into()),
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -174,7 +174,7 @@ fn test_to_config_with_base() {
         url: "https://example.com/baz.git".into(),
         branch: None,
         base: Some("cafebabe".into()),
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -195,7 +195,7 @@ fn test_to_config_all_fields() {
         url: "https://example.com/full.git".into(),
         branch: Some("stable".into()),
         base: Some("deadbeef".into()),
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -312,7 +312,7 @@ fn test_config_roundtrip_full() {
         url: "https://example.com/roundtrip.git".into(),
         branch: Some("main".into()),
         base: Some("abc123def456".into()),
-        path: None,
+        commit: Default::default(),
         patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
@@ -336,7 +336,7 @@ fn test_config_roundtrip_optional_fields_absent() {
         url: "https://example.com/minimal.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
     original.to_config(&mut cfg).unwrap();
@@ -358,7 +358,7 @@ fn test_config_roundtrip_patterns_update() {
         url: "https://example.com/pat.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
@@ -578,18 +578,23 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     // Upstream tree has two root-level files.
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("a.txt", b"aaa"), ("b.txt", b"bbb")]);
-    commit_tree_to_ref(&repo, "refs/vendor/upstream/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/upstream/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "upstream".into(),
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
-        path: Some("lib".into()),
-        patterns: vec!["*.txt".into()],
+        commit: Default::default(),
+        patterns: vec!["*.txt:lib/".into()],
     };
 
-    // Pattern "*.txt" with path "lib" maps upstream "a.txt" → "lib/a.txt".
+    // Pattern "*.txt:lib/" maps upstream "a.txt" → "lib/a.txt".
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
@@ -626,11 +631,11 @@ fn test_track_vendor_pattern_selective_glob() {
         url: "https://example.com/sel.git".into(),
         branch: None,
         base: None,
-        path: Some("src".into()),
-        patterns: vec!["*.rs".into()],
+        commit: Default::default(),
+        patterns: vec!["*.rs:src/".into()],
     };
 
-    // Pattern "*.rs" with path "src" maps upstream "main.rs" → "src/main.rs".
+    // Pattern "*.rs:src/" maps upstream "main.rs" → "src/main.rs".
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
@@ -652,18 +657,23 @@ fn test_track_vendor_pattern_nested_directory() {
     // Upstream tree: sub/deep.txt
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("sub/deep.txt", b"deep")]);
-    commit_tree_to_ref(&repo, "refs/vendor/nested/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/nested/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "nested".into(),
         url: "https://example.com/nested.git".into(),
         branch: None,
         base: None,
-        path: Some("vendor".into()),
-        patterns: vec!["sub/".into()],
+        commit: Default::default(),
+        patterns: vec!["sub/:vendor/".into()],
     };
 
-    // Pattern "sub/" with path "vendor" strips "sub/" and prepends "vendor/".
+    // Pattern "sub/:vendor/" strips "sub/" and prepends "vendor/".
     // upstream "sub/deep.txt" → "vendor/deep.txt".
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor).unwrap();
@@ -692,11 +702,11 @@ fn test_track_vendor_pattern_deep_pattern() {
         url: "https://example.com/pfx.git".into(),
         branch: None,
         base: None,
-        path: Some("third_party".into()),
-        patterns: vec!["**/*.c".into()],
+        commit: Default::default(),
+        patterns: vec!["**/*.c:third_party/".into()],
     };
 
-    // Pattern "**/*.c" with path "third_party" – no prefix stripped (** has empty
+    // Pattern "**/*.c:third_party/" – no prefix stripped (** has empty
     // literal prefix), destination "third_party/" prepended.
     // upstream "lib/foo.c" → "third_party/lib/foo.c".
     with_cwd(tmp.path(), || {
@@ -722,18 +732,23 @@ fn test_track_vendor_pattern_multiple_globs() {
             ("README.txt", b"hello"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/multi/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/multi/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "multi".into(),
         url: "https://example.com/multi.git".into(),
         branch: None,
         base: None,
-        path: Some("lib".into()),
-        patterns: vec!["*.rs".into(), "*.toml".into()],
+        commit: Default::default(),
+        patterns: vec!["*.rs:lib/".into(), "*.toml:lib/".into()],
     };
 
-    // Two patterns with path "lib", both mapping to "lib/".
+    // Two patterns with colon-syntax, both mapping to "lib/".
     with_cwd(tmp.path(), || {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
@@ -757,15 +772,20 @@ fn test_track_vendor_pattern_multiple_globs() {
 fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     let (repo, tmp) = init_repo_with_gitattributes("# existing\n");
     let upstream_tree = build_tree(&repo, &[("data.bin", b"\x00\x01")]);
-    commit_tree_to_ref(&repo, "refs/vendor/nomatch/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/nomatch/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "nomatch".into(),
         url: "https://example.com/nomatch.git".into(),
         branch: None,
         base: None,
-        path: Some("src".into()),
-        patterns: vec!["*.rs".into()],
+        commit: Default::default(),
+        patterns: vec!["*.rs:src/".into()],
     };
 
     // No upstream files match "*.rs" so nothing should be written.
@@ -793,14 +813,19 @@ fn test_track_vendor_pattern_expands_to_per_file() {
             ("README.md", b"# hi"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/expand/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/expand/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "expand".into(),
         url: "https://example.com/expand.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec!["**/*.txt".into()],
     };
 
@@ -934,7 +959,7 @@ fn setup_merge_scenario(
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: patterns.iter().map(|s| s.to_string()).collect(),
     };
 
@@ -1039,7 +1064,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
-        path: None,
+        commit: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -1107,7 +1132,7 @@ fn test_merge_vendor_conflict() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
-        path: None,
+        commit: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -1231,7 +1256,7 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_tree_commit.to_string()),
-        path: None,
+        commit: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -1311,7 +1336,7 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
         url: "https://example.com/fwdslash.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -1364,14 +1389,19 @@ fn test_add_vendor_nested_paths_match_correctly() {
 
     // Build upstream tree with a nested file at the same path.
     let upstream_tree = build_tree(&repo, &[("sub/overlap.c", b"// upstream v1")]);
-    commit_tree_to_ref(&repo, "refs/vendor/nested/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/nested/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "nested".into(),
         url: "https://example.com/nested.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec!["sub/".into()],
     };
 
@@ -1573,8 +1603,8 @@ fn test_merge_vendor_new_file_at_mapped_path() {
         url: "https://example.com/upstream.git".into(),
         branch: None,
         base: Some(base_commit.to_string()),
-        path: Some("ext".into()),
-        patterns: vec!["src/**".to_string()],
+        commit: Default::default(),
+        patterns: vec!["src/**:ext/".to_string()],
     };
 
     let idx = repo.merge_vendor(&vendor, None, None).unwrap();
@@ -1618,20 +1648,25 @@ fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
             ("docs/guide.md", b"# Guide"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/mixed/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/mixed/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "mixed".into(),
         url: "https://example.com/mixed.git".into(),
         branch: None,
         base: None,
-        path: Some("ext".into()),
-        patterns: vec!["src/**".into(), "docs/**".into()],
+        commit: Default::default(),
+        patterns: vec!["src/**:ext/".into(), "docs/**:ext/".into()],
     };
 
     with_cwd(tmp.path(), || {
-        // "src/**" with path "ext": src/main.rs → strips "src/" → main.rs → ext/main.rs
-        // "docs/**" with path "ext": docs/guide.md → strips "docs/" → guide.md → ext/guide.md
+        // "src/**:ext/": src/main.rs → strips "src/" → main.rs → ext/main.rs
+        // "docs/**:ext/": docs/guide.md → strips "docs/" → guide.md → ext/guide.md
         let index = repo.add_vendor(&vendor, None).unwrap();
         let paths: Vec<String> = index
             .iter()
@@ -1668,19 +1703,24 @@ fn test_add_vendor_glob_filtering_with_mapping() {
             ("other/data.bin", b"\x00\x01\x02"),
         ],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/filter/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(
+        &repo,
+        "refs/vendor/filter/head",
+        &upstream_tree,
+        "vendor tip",
+    );
 
     let vendor = VendorSource {
         name: "filter".into(),
         url: "https://example.com/filter.git".into(),
         branch: None,
         base: None,
-        path: Some("ext".into()),
-        patterns: vec!["src/**/*.rs".into()],
+        commit: Default::default(),
+        patterns: vec!["src/**/*.rs:ext/".into()],
     };
 
     with_cwd(tmp.path(), || {
-        // "src/**/*.rs" with path "ext" – literal prefix is "src/", so
+        // "src/**/*.rs:ext/" – literal prefix is "src/", so
         // "src/lib.rs" → strips "src/" → "lib.rs" → prepend "ext/" → "ext/lib.rs".
         let index = repo.add_vendor(&vendor, None).unwrap();
         let paths: Vec<String> = index
@@ -1784,7 +1824,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
         url: "https://example.com/myvendor.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec!["**".into()],
     };
 

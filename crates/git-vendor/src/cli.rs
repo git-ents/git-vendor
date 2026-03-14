@@ -92,23 +92,43 @@ pub enum Command {
         name: String,
     },
 
-    /// Add glob pattern(s) to an existing vendor's configuration.
+    /// Track files or patterns for a vendor.
+    ///
+    /// Without `--pattern`: writes `vendor=<name>` entries into `.gitattributes`
+    /// for the given file paths.
+    ///
+    /// With `--pattern`: adds glob pattern(s) to the vendor's `patterns` list
+    /// in `.gitvendors`.
     Track {
         /// Vendor name.
         name: String,
 
-        /// Glob pattern(s) to add.
-        #[arg(short, long, required = true)]
+        /// File path(s) to attribute (used without --pattern).
+        #[arg(conflicts_with = "pattern")]
+        paths: Vec<String>,
+
+        /// Glob pattern(s) to add to the vendor's pattern list in `.gitvendors`.
+        #[arg(short, long)]
         pattern: Vec<String>,
     },
 
-    /// Remove glob pattern(s) from an existing vendor's configuration.
+    /// Untrack files or patterns for a vendor.
+    ///
+    /// Without `--pattern`: removes `vendor=<name>` entries from `.gitattributes`
+    /// for the given file paths.
+    ///
+    /// With `--pattern`: removes glob pattern(s) from the vendor's `patterns` list
+    /// in `.gitvendors`.
     Untrack {
         /// Vendor name.
         name: String,
 
-        /// Glob pattern(s) to remove.
-        #[arg(short, long, required = true)]
+        /// File path(s) to unattribute (used without --pattern).
+        #[arg(conflicts_with = "pattern")]
+        paths: Vec<String>,
+
+        /// Glob pattern(s) to remove from the vendor's pattern list in `.gitvendors`.
+        #[arg(short, long)]
         pattern: Vec<String>,
     },
 
@@ -131,6 +151,11 @@ pub enum Command {
         /// Strategy option for resolving conflicting regions during the merge.
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
         strategy_option: StrategyOption,
+
+        /// Stage the merge result without creating a commit. Incompatible with
+        /// the `replay` commit mode.
+        #[arg(long)]
+        no_commit: bool,
     },
 
     /// Fetch and merge upstream changes for a vendor.
@@ -146,6 +171,11 @@ pub enum Command {
         /// Strategy option for resolving conflicting regions during the merge.
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
         strategy_option: StrategyOption,
+
+        /// Stage the merge result without creating a commit. Incompatible with
+        /// the `replay` commit mode.
+        #[arg(long)]
+        no_commit: bool,
     },
 }
 

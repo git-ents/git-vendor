@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use git_set_attr::SetAttr;
 use git2::Repository;
 
+use crate::CommitMode;
+use crate::PatternMapping;
 use crate::Vendor;
 use crate::VendorSource;
 
@@ -79,7 +82,7 @@ pub fn add(
     //   `cd ext/ && git vendor add ...` places files under `ext/`.
     //
     // A resulting path of `""` / `"."` means "no remapping" and is treated
-    // as `None` by `apply_default_path`.
+    // as `None`.
     let resolved_path: Option<std::path::PathBuf> = match (path, &cwd_rel) {
         // Explicit --path: join with the CWD offset so relative paths like
         // "." are anchored to where the user is standing.
@@ -106,16 +109,37 @@ pub fn add(
     };
 
     let resolved_path_str: Option<String> = resolved_path.as_deref().map(|p| {
-        p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_string()
+        p.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_string()
     });
+
+    // Bake the resolved path into each pattern that lacks an explicit colon
+    // destination, writing colon-syntax into .gitvendors (e.g. `src/**:ext/`).
+    // After add, path plays no further role — patterns are self-contained.
+    let resolved_patterns: Vec<String> = patterns
+        .iter()
+        .map(|raw| {
+            let m = PatternMapping::parse(raw);
+            if m.destination.is_some() {
+                // Already has an explicit colon mapping — keep it.
+                m.to_raw()
+            } else if let Some(ref dest) = resolved_path_str {
+                format!("{}:{}/", m.glob, dest)
+            } else {
+                m.glob
+            }
+        })
+        .collect();
 
     let source = VendorSource {
         name: name.to_string(),
         url: url.to_string(),
         branch: branch.map(String::from),
         base: None,
-        path: resolved_path_str,
-        patterns: patterns.iter().map(|s| s.to_string()).collect(),
+        commit: Default::default(),
+        patterns: resolved_patterns,
     };
 
     // Persist to .gitvendors config (create the file if it doesn't exist yet).
@@ -140,7 +164,7 @@ pub fn add(
         url: source.url.clone(),
         branch: source.branch.clone(),
         base: Some(vendor_commit.id().to_string()),
-        path: source.path.clone(),
+        commit: source.commit.clone(),
         patterns: source.patterns.clone(),
     };
     {
@@ -175,11 +199,11 @@ pub fn add(
     Ok(outcome)
 }
 
-/// Add pattern(s) to an existing vendor's configuration in `.gitvendors`.
+/// Add glob pattern(s) to an existing vendor's configuration in `.gitvendors`.
 ///
 /// Only edits `.gitvendors` — does not fetch, merge, or touch `.gitattributes`.
 /// Run `git vendor merge` to apply the new patterns.
-pub fn track(
+pub fn track_patterns(
     repo: &Repository,
     name: &str,
     patterns: &[&str],
@@ -200,11 +224,11 @@ pub fn track(
     Ok(())
 }
 
-/// Remove pattern(s) from an existing vendor's configuration in `.gitvendors`.
+/// Remove glob pattern(s) from an existing vendor's configuration in `.gitvendors`.
 ///
 /// Only edits `.gitvendors` — does not touch `.gitattributes` or the working tree.
 /// Run `git vendor merge` to reconcile.
-pub fn untrack(
+pub fn untrack_patterns(
     repo: &Repository,
     name: &str,
     patterns: &[&str],
@@ -218,6 +242,77 @@ pub fn untrack(
 
     let mut cfg = repo.vendor_config()?;
     vendor.to_config(&mut cfg)?;
+    Ok(())
+}
+
+/// Write `vendor=<name>` entries into `.gitattributes` for the given file paths.
+pub fn track_attrs(
+    repo: &Repository,
+    name: &str,
+    paths: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Verify the vendor exists.
+    repo.get_vendor_by_name(name)?
+        .ok_or_else(|| format!("vendor '{}' not found", name))?;
+
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+    let gitattributes = workdir.join(".gitattributes");
+    let vendor_attr = format!("vendor={}", name);
+
+    for path in paths {
+        repo.set_attr(path, &[&vendor_attr], &gitattributes)?;
+    }
+
+    Ok(())
+}
+
+/// Remove `vendor=<name>` entries from `.gitattributes` for the given file paths.
+pub fn untrack_attrs(
+    repo: &Repository,
+    name: &str,
+    paths: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Verify the vendor exists.
+    repo.get_vendor_by_name(name)?
+        .ok_or_else(|| format!("vendor '{}' not found", name))?;
+
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
+    let gitattributes = workdir.join(".gitattributes");
+
+    if !gitattributes.exists() {
+        return Ok(());
+    }
+
+    let needle = format!("vendor={}", name);
+    let to_remove: std::collections::HashSet<&str> = paths.iter().copied().collect();
+
+    let content = std::fs::read_to_string(&gitattributes)?;
+    let filtered: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            // Keep the line unless it matches this vendor attr AND its path is in `paths`.
+            let mut tokens = line.split_whitespace();
+            let line_path = match tokens.next() {
+                Some(p) => p,
+                None => return true,
+            };
+            let has_attr = tokens.any(|t| t == needle);
+            !(has_attr && to_remove.contains(line_path))
+        })
+        .collect();
+
+    if filtered.len() < content.lines().count() {
+        let mut out = filtered.join("\n");
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        std::fs::write(&gitattributes, out)?;
+    }
+
     Ok(())
 }
 
@@ -274,22 +369,61 @@ pub fn fetch_all(
 #[derive(Debug)]
 pub struct VendorStatus {
     pub name: String,
-    /// `Some(oid)` when upstream has unmerged changes at that commit;
-    /// `None` when the vendor is up to date.
-    pub upstream_oid: Option<git2::Oid>,
+    /// The state of the vendor relative to its upstream.
+    pub state: VendorState,
 }
 
-/// Check every configured vendor and report whether it has unmerged upstream
-/// changes.
+/// The relationship between a vendor's local base and its upstream head.
+#[derive(Debug)]
+pub enum VendorState {
+    /// Local base matches upstream head — nothing to merge.
+    UpToDate,
+    /// Upstream has new commits reachable from the current base.
+    UpdateAvailable { head: git2::Oid },
+    /// Upstream was force-pushed: base is no longer an ancestor of head.
+    ForcePushed { head: git2::Oid },
+}
+
+/// Check every configured vendor and report its state relative to upstream.
 pub fn status(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
-    let statuses = repo.check_vendors()?;
-    let mut out: Vec<VendorStatus> = statuses
-        .into_iter()
-        .map(|(vendor, maybe_oid)| VendorStatus {
+    let vendors = repo.list_vendors()?;
+    let mut out = Vec::with_capacity(vendors.len());
+
+    for vendor in vendors {
+        let head_oid = repo
+            .find_reference(&vendor.head_ref())?
+            .target()
+            .ok_or_else(|| {
+                git2::Error::from_str(&format!(
+                    "refs/vendor/{}/head is a symbolic ref; expected a direct ref",
+                    vendor.name
+                ))
+            })?;
+
+        let state = match &vendor.base {
+            None => VendorState::UpdateAvailable { head: head_oid },
+            Some(base_str) => {
+                let base_oid = git2::Oid::from_str(base_str)?;
+                if base_oid == head_oid {
+                    VendorState::UpToDate
+                } else {
+                    // Determine whether base is an ancestor of head.
+                    let is_ancestor = repo.graph_descendant_of(head_oid, base_oid)?;
+                    if is_ancestor {
+                        VendorState::UpdateAvailable { head: head_oid }
+                    } else {
+                        VendorState::ForcePushed { head: head_oid }
+                    }
+                }
+            }
+        };
+
+        out.push(VendorStatus {
             name: vendor.name,
-            upstream_oid: maybe_oid,
-        })
-        .collect();
+            state,
+        });
+    }
+
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
@@ -566,11 +700,12 @@ pub fn merge_one(
     repo: &Repository,
     name: &str,
     file_favor: Option<git2::FileFavor>,
+    no_commit: bool,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
     let vendor = repo
         .get_vendor_by_name(name)?
         .ok_or_else(|| format!("vendor '{}' not found", name))?;
-    merge_vendor(repo, &vendor, file_favor)
+    merge_vendor(repo, &vendor, file_favor, no_commit)
 }
 
 /// Merge upstream changes for every configured vendor.
@@ -580,11 +715,12 @@ pub fn merge_one(
 pub fn merge_all(
     repo: &Repository,
     file_favor: Option<git2::FileFavor>,
+    no_commit: bool,
 ) -> Result<Vec<(String, MergeOutcome)>, Box<dyn std::error::Error>> {
     let vendors = repo.list_vendors()?;
     let mut results = Vec::with_capacity(vendors.len());
     for v in &vendors {
-        let outcome = merge_vendor(repo, v, file_favor)?;
+        let outcome = merge_vendor(repo, v, file_favor, no_commit)?;
         results.push((v.name.clone(), outcome));
     }
     Ok(results)
@@ -662,7 +798,11 @@ fn merge_vendor(
     repo: &Repository,
     vendor: &VendorSource,
     file_favor: Option<git2::FileFavor>,
+    no_commit: bool,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
+    if no_commit && vendor.commit == CommitMode::Replay {
+        return Err("--no-commit is incompatible with the `replay` commit mode".into());
+    }
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
     let vendor_commit = vendor_ref.peel_to_commit()?;
 
@@ -681,7 +821,7 @@ fn merge_vendor(
         url: vendor.url.clone(),
         branch: vendor.branch.clone(),
         base: Some(vendor_commit.id().to_string()),
-        path: vendor.path.clone(),
+        commit: vendor.commit.clone(),
         patterns: vendor.patterns.clone(),
     };
     {
@@ -713,5 +853,37 @@ fn merge_vendor(
     }
     repo_index.write()?;
 
+    if no_commit {
+        let vendor = match &outcome {
+            MergeOutcome::Clean { vendor } | MergeOutcome::Conflict { vendor, .. } => vendor,
+            MergeOutcome::UpToDate { .. } => unreachable!("no_commit on up-to-date vendor"),
+        };
+        write_vendor_msg(repo, vendor, &vendor_commit)?;
+    }
+
     Ok(outcome)
+}
+
+/// Write a prepared commit message to `.git/VENDOR_MSG` for `--no-commit` merges.
+fn write_vendor_msg(
+    repo: &Repository,
+    vendor: &VendorSource,
+    head_commit: &git2::Commit<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let base_short = vendor
+        .base
+        .as_deref()
+        .and_then(|b| b.get(..7))
+        .unwrap_or("unknown");
+    let head_short = &head_commit.id().to_string()[..7];
+    let branch = vendor.branch.as_deref().unwrap_or("HEAD");
+
+    let msg = format!(
+        "Vendor update: {} {} ({}...{})\n",
+        vendor.name, branch, base_short, head_short,
+    );
+
+    let git_dir = repo.path();
+    std::fs::write(git_dir.join("VENDOR_MSG"), msg)?;
+    Ok(())
 }

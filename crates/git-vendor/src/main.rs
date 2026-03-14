@@ -90,10 +90,9 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 for v in &vendors {
                     let branch = v.branch.as_deref().unwrap_or("(default)");
                     let base = v.base.as_deref().unwrap_or("(none)");
-                    let path = v.path.as_deref().unwrap_or("(root)");
                     println!(
-                        "{}\n  url:    {}\n  branch: {}\n  base:   {}\n  path:   {}",
-                        v.name, v.url, branch, base, path,
+                        "{}\n  url:    {}\n  branch: {}\n  base:   {}",
+                        v.name, v.url, branch, base,
                     );
                 }
             }
@@ -158,19 +157,47 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         },
 
-        Command::Track { name, pattern } => {
-            let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
-            exe::track(&repo, name, &patterns)?;
-            for p in &patterns {
-                eprintln!("Tracking '{}' for vendor '{}'.", p, name);
+        Command::Track {
+            name,
+            paths,
+            pattern,
+        } => {
+            if !pattern.is_empty() {
+                let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
+                exe::track_patterns(&repo, name, &patterns)?;
+                for p in &patterns {
+                    eprintln!("Added pattern '{}' for vendor '{}'.", p, name);
+                }
+            } else if !paths.is_empty() {
+                let path_strs: Vec<&str> = paths.iter().map(String::as_str).collect();
+                exe::track_attrs(&repo, name, &path_strs)?;
+                for p in &path_strs {
+                    eprintln!("Tracking '{}' for vendor '{}'.", p, name);
+                }
+            } else {
+                return Err("specify file path(s) or --pattern <glob>...".into());
             }
         }
 
-        Command::Untrack { name, pattern } => {
-            let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
-            exe::untrack(&repo, name, &patterns)?;
-            for p in &patterns {
-                eprintln!("Untracking '{}' for vendor '{}'.", p, name);
+        Command::Untrack {
+            name,
+            paths,
+            pattern,
+        } => {
+            if !pattern.is_empty() {
+                let patterns: Vec<&str> = pattern.iter().map(String::as_str).collect();
+                exe::untrack_patterns(&repo, name, &patterns)?;
+                for p in &patterns {
+                    eprintln!("Removed pattern '{}' for vendor '{}'.", p, name);
+                }
+            } else if !paths.is_empty() {
+                let path_strs: Vec<&str> = paths.iter().map(String::as_str).collect();
+                exe::untrack_attrs(&repo, name, &path_strs)?;
+                for p in &path_strs {
+                    eprintln!("Untracking '{}' for vendor '{}'.", p, name);
+                }
+            } else {
+                return Err("specify file path(s) or --pattern <glob>...".into());
             }
         }
 
@@ -189,12 +216,22 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 let mut any_updates = false;
                 for s in &statuses {
-                    match s.upstream_oid {
-                        Some(oid) => {
-                            println!("{}: upstream updated ({})", s.name, oid);
+                    match &s.state {
+                        exe::VendorState::UpToDate => {
+                            println!("{}: up to date", s.name);
+                        }
+                        exe::VendorState::UpdateAvailable { head } => {
+                            println!("{}: upstream updated ({})", s.name, head);
                             any_updates = true;
                         }
-                        None => println!("{}: up to date", s.name),
+                        exe::VendorState::ForcePushed { head } => {
+                            eprintln!(
+                                "warning: '{}' upstream was force-pushed ({}); \
+                                 base is no longer an ancestor — review before merging",
+                                s.name, head
+                            );
+                            any_updates = true;
+                        }
                     }
                 }
                 if !any_updates && statuses.len() > 1 {
@@ -218,6 +255,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             name,
             all,
             strategy_option,
+            no_commit,
         } => {
             let file_favor = match strategy_option {
                 cli::StrategyOption::Normal => None,
@@ -231,7 +269,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut outcomes = Vec::with_capacity(targets.len());
             for t in &targets {
-                let outcome = exe::merge_one(&repo, t, file_favor)?;
+                let outcome = exe::merge_one(&repo, t, file_favor, *no_commit)?;
                 outcomes.push((t.clone(), outcome));
             }
 
@@ -242,6 +280,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             name,
             all,
             strategy_option,
+            no_commit,
         } => {
             let file_favor = match strategy_option {
                 cli::StrategyOption::Normal => None,
@@ -264,7 +303,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut outcomes = Vec::with_capacity(targets.len());
             for t in &targets {
-                let outcome = exe::merge_one(&repo, t, file_favor)?;
+                let outcome = exe::merge_one(&repo, t, file_favor, *no_commit)?;
                 outcomes.push((t.clone(), outcome));
             }
 

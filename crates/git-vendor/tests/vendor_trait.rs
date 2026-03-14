@@ -265,7 +265,6 @@ fn test_vendor_config_absent_file_returns_empty_config() {
     assert!(cfg.get_string("vendor.anything.url").is_err());
 }
 
-
 #[test]
 fn test_vendor_config_fails_for_bare_repo() {
     let dir = TempDir::new().unwrap();
@@ -391,7 +390,7 @@ fn test_find_vendor_base_returns_none_when_no_base() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
 
@@ -412,7 +411,7 @@ fn test_find_vendor_base_returns_commit_when_base_exists() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: Some(commit_oid.to_string()),
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
 
@@ -428,7 +427,7 @@ fn test_find_vendor_base_errors_on_invalid_oid() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: Some("not-a-valid-sha".into()),
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
 
@@ -444,7 +443,7 @@ fn test_find_vendor_base_errors_on_nonexistent_commit() {
         url: "https://example.com/foo.git".into(),
         branch: None,
         base: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into()),
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
 
@@ -694,7 +693,7 @@ fn test_fetch_vendor_fails_on_bad_url() {
         url: "file:///this/path/does/not/exist".into(),
         branch: None,
         base: None,
-        path: None,
+        commit: Default::default(),
         patterns: vec![],
     };
 

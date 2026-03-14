@@ -7,8 +7,7 @@ use git_filter_tree::FilterTree;
 use git_set_attr::SetAttr;
 use std::{
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    str::FromStr,
+    path::Path,
 };
 
 use git2::Repository;
@@ -123,71 +122,6 @@ pub fn parse_patterns(raws: &[impl AsRef<str>]) -> Vec<PatternMapping> {
 
 /// Build a [`globset::GlobSet`] from a slice of [`PatternMapping`]s, using
 /// only the glob side (left of `:`).
-fn build_glob_matcher_from_mappings(
-    mappings: &[PatternMapping],
-) -> Result<globset::GlobSet, git2::Error> {
-    let globs: Vec<&str> = mappings.iter().map(|m| m.glob.as_str()).collect();
-    build_glob_matcher(&globs)
-}
-
-/// Build a [`globset::GlobSet`] from a slice of pattern strings, normalizing
-/// trailing-`/` directory shorthands to `dir/**`.
-fn build_glob_matcher(patterns: &[impl AsRef<str>]) -> Result<globset::GlobSet, git2::Error> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for pat in patterns {
-        let pat = pat.as_ref();
-        let normalized = if pat.ends_with('/') {
-            format!("{}**", pat)
-        } else {
-            pat.to_string()
-        };
-        let g = globset::Glob::new(&normalized)
-            .map_err(|e| git2::Error::from_str(&format!("Invalid pattern '{}': {}", pat, e)))?;
-        builder.add(g);
-    }
-    builder
-        .build()
-        .map_err(|e| git2::Error::from_str(&e.to_string()))
-}
-
-/// Convert a `(globs, path)` pair — the legacy API shape — into a
-/// `Vec<PatternMapping>`.
-///
-/// Each glob is parsed with [`PatternMapping::parse`].  If a glob already
-/// carries an explicit colon destination, that destination is used as-is.
-/// Otherwise `path` is applied as the destination prefix (unless `path` is
-/// `"."` or empty, which means "no remapping").
-fn globs_and_path_to_mappings(globs: &[&str], path: &Path) -> Vec<PatternMapping> {
-    // Determine the normalized destination string from `path`.
-    let dest: Option<String> = {
-        let s = path.to_string_lossy().replace('\\', "/");
-        let s = s.trim_end_matches('/');
-        if s.is_empty() || s == "." {
-            None
-        } else {
-            Some(format!("{}/", s))
-        }
-    };
-
-    globs
-        .iter()
-        .map(|raw| {
-            let m = PatternMapping::parse(raw);
-            if m.destination.is_some() {
-                // Already has an explicit colon mapping – keep it.
-                m
-            } else if let Some(ref d) = dest {
-                // Apply `path` as the destination.
-                PatternMapping {
-                    glob: m.glob,
-                    destination: Some(d.clone()),
-                }
-            } else {
-                m
-            }
-        })
-        .collect()
-}
 
 /// Find the first [`PatternMapping`] from `mappings` whose glob matches
 /// `upstream_path`, and return the computed local path.
@@ -287,23 +221,55 @@ fn build_tree_from_entries<'a>(
     repo.find_tree(oid)
 }
 
+/// Controls how upstream commits are recorded in the local history.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CommitMode {
+    /// Create a merge commit with a synthetic squash commit as the second parent.
+    #[default]
+    Squash,
+    /// Create a single-parent commit on HEAD.
+    Linear,
+    /// Replay each upstream commit individually, preserving authorship.
+    Replay,
+}
+
+impl CommitMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CommitMode::Squash => "squash",
+            CommitMode::Linear => "linear",
+            CommitMode::Replay => "replay",
+        }
+    }
+
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "squash" => Some(CommitMode::Squash),
+            "linear" => Some(CommitMode::Linear),
+            "replay" => Some(CommitMode::Replay),
+            _ => None,
+        }
+    }
+}
+
 /// All metadata required to retrieve necessary objects from a vendor.
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct VendorSource {
     /// The unique identifier for this particular vendor.
     pub name: String,
     pub url: String,
-    /// The branch to track on the upstream remote.
+    /// The branch, tag, or SHA to track on the upstream remote.
+    /// Accepts anything that `git fetch` accepts as a refspec source.
     /// If not specified, this defaults to `HEAD`.
     pub branch: Option<String>,
     /// The most recent merge base. If not specified,
     /// it is assumed that no prior merge has taken
     /// place and conflicts must be resolved manually.
     pub base: Option<String>,
-    /// Local directory where vendored files are placed.
-    /// `None` means files are placed at the repo root (no remapping).
-    pub path: Option<String>,
-    /// Glob pattern(s) selecting which upstream files to vendor.
+    /// How upstream commits are recorded in local history.
+    pub commit: CommitMode,
+    /// Glob pattern(s) selecting which upstream files to vendor,
+    /// optionally with colon-syntax destination mapping (e.g. `src/**:ext/`).
     pub patterns: Vec<String>,
 }
 
@@ -319,8 +285,11 @@ impl VendorSource {
             cfg.set_str(&format!("vendor.{}.base", &self.name), base)?;
         }
 
-        if let Some(path) = &self.path {
-            cfg.set_str(&format!("vendor.{}.path", &self.name), path)?;
+        if self.commit != CommitMode::default() {
+            cfg.set_str(
+                &format!("vendor.{}.commit", &self.name),
+                self.commit.as_str(),
+            )?;
         }
 
         // Remove existing pattern entries before writing the current set.
@@ -344,7 +313,11 @@ impl VendorSource {
         let url = cfg.get_string(&format!("vendor.{name}.url"))?;
         let branch = cfg.get_string(&format!("vendor.{name}.branch")).ok();
         let base = cfg.get_string(&format!("vendor.{name}.base")).ok();
-        let path = cfg.get_string(&format!("vendor.{name}.path")).ok();
+        let commit = cfg
+            .get_string(&format!("vendor.{name}.commit"))
+            .ok()
+            .and_then(|s| CommitMode::from_str(&s))
+            .unwrap_or_default();
 
         let mut patterns = Vec::new();
         let pattern_entries = cfg.multivar(&format!("vendor.{name}.pattern"), None);
@@ -361,7 +334,7 @@ impl VendorSource {
             url,
             branch,
             base,
-            path,
+            commit,
             patterns,
         }))
     }
@@ -383,27 +356,6 @@ impl VendorSource {
             None => "HEAD".into(),
         }
     }
-}
-
-/// Build `PatternMapping`s for a vendor by combining its plain-glob patterns
-/// with its `path` as the destination prefix.
-fn mappings_for_vendor(vendor: &VendorSource) -> Vec<PatternMapping> {
-    let dest: Option<String> = vendor.path.as_deref().and_then(|p| {
-        let s = p.trim_end_matches('/');
-        if s.is_empty() || s == "." {
-            None
-        } else {
-            Some(format!("{}/", s))
-        }
-    });
-    vendor
-        .patterns
-        .iter()
-        .map(|glob| PatternMapping {
-            glob: glob.clone(),
-            destination: dest.clone(),
-        })
-        .collect()
 }
 
 fn vendors_from_config(cfg: &git2::Config) -> Result<Vec<VendorSource>, git2::Error> {
@@ -438,9 +390,6 @@ fn vendors_from_config(cfg: &git2::Config) -> Result<Vec<VendorSource>, git2::Er
 pub trait Vendor {
     /// Open the `$WORKDIR/.gitvendors` config file.
     fn vendor_config(&self) -> Result<git2::Config, git2::Error>;
-
-    /// Retrieve all vendored files in a given tree.
-    fn vendored_subtree(&self) -> Result<git2::Tree<'_>, git2::Error>;
 
     /// Return all vendor sources tracked at the commit provided (defaulting to `HEAD`).
     fn list_vendors(&self) -> Result<Vec<VendorSource>, git2::Error>;
@@ -543,29 +492,6 @@ impl Vendor for Repository {
         Ok(cfg)
     }
 
-    fn vendored_subtree(&self) -> Result<git2::Tree<'_>, git2::Error> {
-        let head = self.head()?.peel_to_tree()?;
-
-        let mut vendored_entries: Vec<git2::TreeEntry> = Vec::new();
-
-        head.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-            if let Some(attrs) = entry.name().and_then(|name| {
-                self.get_attr(
-                    &PathBuf::from_str(name).ok()?,
-                    "vendored",
-                    git2::AttrCheckFlags::FILE_THEN_INDEX,
-                )
-                .ok()
-            }) && (attrs == Some("true") || attrs == Some("set"))
-            {
-                vendored_entries.push(entry.to_owned());
-            }
-            git2::TreeWalkResult::Ok
-        })?;
-
-        todo!()
-    }
-
     fn list_vendors(&self) -> Result<Vec<VendorSource>, git2::Error> {
         let cfg = self.vendor_config()?;
         vendors_from_config(&cfg)
@@ -624,7 +550,7 @@ impl Vendor for Repository {
         let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
         let vendor_attr = format!("vendor={}", vendor.name);
 
-        let mappings = mappings_for_vendor(vendor);
+        let mappings = parse_patterns(&vendor.patterns);
 
         // Collect (local_path) for each upstream file matched by any mapping.
         let mut matched_local_paths: Vec<String> = Vec::new();
@@ -652,7 +578,7 @@ impl Vendor for Repository {
         vendor: &VendorSource,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        let mappings = mappings_for_vendor(vendor);
+        let mappings = parse_patterns(&vendor.patterns);
 
         // Build the remapped upstream tree: each upstream file is placed at its
         // local (mapped) path according to the pattern mappings.
@@ -698,23 +624,21 @@ impl Vendor for Repository {
         _maybe_opts: Option<&mut git2::FetchOptions>,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
-        let mappings = mappings_for_vendor(vendor);
+        let mappings = parse_patterns(&vendor.patterns);
 
         // UPSTREAM (theirs): remap the upstream tree to local paths via mappings.
         let upstream_tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
         let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
-        // LOCAL (ours): use gitattributes to find files currently tracked for
-        // this vendor.  Falls back to glob matching against local paths when the
-        // gitattribute is unset (e.g. legacy .gitattributes or first-ever merge).
-        let glob_matcher = build_glob_matcher_from_mappings(&mappings)?;
+        // LOCAL (ours): use gitattributes to determine which files are owned by
+        // this vendor.  A missing or mismatched attribute means the file is not
+        // owned here — no fallback.
         let expected_vendor = vendor.name.clone();
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered = self.filter_by_predicate(&ours, |repo, path| {
             match repo.get_attr(path, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
                 Ok(Some(value)) if value == expected_vendor => true,
-                // Legacy fallback: match local paths against the glob side of patterns.
-                _ => glob_matcher.is_match(path),
+                _ => false,
             }
         })?;
 
