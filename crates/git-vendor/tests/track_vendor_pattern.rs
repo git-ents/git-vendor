@@ -105,9 +105,9 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     let vendor = VendorSource {
         name: "upstream".into(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["*.txt:lib/".into()],
     };
 
@@ -142,9 +142,9 @@ fn test_track_vendor_pattern_selective_glob() {
     let vendor = VendorSource {
         name: "sel".into(),
         url: "https://example.com/sel.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["*.rs:src/".into()],
     };
 
@@ -177,9 +177,9 @@ fn test_track_vendor_pattern_nested_directory() {
     let vendor = VendorSource {
         name: "nested".into(),
         url: "https://example.com/nested.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["sub/:vendor/".into()],
     };
 
@@ -207,9 +207,9 @@ fn test_track_vendor_pattern_deep_pattern() {
     let vendor = VendorSource {
         name: "pfx".into(),
         url: "https://example.com/pfx.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**/*.c:third_party/".into()],
     };
 
@@ -245,9 +245,9 @@ fn test_track_vendor_pattern_multiple_globs() {
     let vendor = VendorSource {
         name: "multi".into(),
         url: "https://example.com/multi.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["*.rs:lib/".into(), "*.toml:lib/".into()],
     };
 
@@ -284,9 +284,9 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     let vendor = VendorSource {
         name: "nomatch".into(),
         url: "https://example.com/nomatch.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["*.rs:src/".into()],
     };
 
@@ -322,9 +322,9 @@ fn test_track_vendor_pattern_expands_to_per_file() {
     let vendor = VendorSource {
         name: "expand".into(),
         url: "https://example.com/expand.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**/*.txt".into()],
     };
 

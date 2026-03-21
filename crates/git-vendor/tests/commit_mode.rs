@@ -1,4 +1,4 @@
-use git_vendor::{CommitMode, VendorSource};
+use git_vendor::{History, VendorSource};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -86,7 +86,7 @@ fn write_gitvendors(tmp: &Path, vendor: &VendorSource) {
 
 fn setup_commit_mode_scenario(
     vendor_name: &str,
-    commit_mode: CommitMode,
+    commit_mode: History,
 ) -> (
     git2::Repository,
     tempfile::TempDir,
@@ -117,9 +117,9 @@ fn setup_commit_mode_scenario(
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: Some("main".into()),
+        ref_name: Some("main".into()),
         base: Some(old_base_oid.to_string()),
-        commit: commit_mode,
+        history: commit_mode,
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -162,12 +162,12 @@ fn setup_commit_mode_scenario(
 #[test]
 fn test_commit_mode_linear_creates_single_parent_commit() {
     let (repo, tmp, _vendor, _old_base, _new_head) =
-        setup_commit_mode_scenario("lin", CommitMode::Linear);
+        setup_commit_mode_scenario("lin", History::Linear);
 
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "lin", None, false).unwrap();
+        git_vendor::exe::update_one(&repo, "lin", None, false).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap();
@@ -191,12 +191,12 @@ fn test_commit_mode_linear_creates_single_parent_commit() {
 #[test]
 fn test_commit_mode_squash_creates_merge_commit() {
     let (repo, tmp, _vendor, _old_base, _new_head) =
-        setup_commit_mode_scenario("sq", CommitMode::Squash);
+        setup_commit_mode_scenario("sq", History::Squash);
 
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "sq", None, false).unwrap();
+        git_vendor::exe::update_one(&repo, "sq", None, false).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap();
@@ -259,9 +259,9 @@ fn test_commit_mode_replay_creates_one_commit_per_upstream() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(old_base_oid.to_string()),
-        commit: CommitMode::Replay,
+        history: History::Replay,
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -288,7 +288,7 @@ fn test_commit_mode_replay_creates_one_commit_per_upstream() {
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap();
@@ -342,9 +342,9 @@ fn test_commit_mode_replay_preserves_author_identity() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(old_base_oid.to_string()),
-        commit: CommitMode::Replay,
+        history: History::Replay,
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -369,7 +369,7 @@ fn test_commit_mode_replay_preserves_author_identity() {
     }
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
     });
 
     let replayed = repo.head().unwrap().peel_to_commit().unwrap();
@@ -382,12 +382,12 @@ fn test_commit_mode_replay_preserves_author_identity() {
 #[test]
 fn test_no_commit_writes_vendor_msg_and_does_not_commit() {
     let (repo, tmp, _vendor, _old_base, _new_head) =
-        setup_commit_mode_scenario("nc", CommitMode::Linear);
+        setup_commit_mode_scenario("nc", History::Linear);
 
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "nc", None, true).unwrap();
+        git_vendor::exe::update_one(&repo, "nc", None, true).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap().id();
@@ -411,10 +411,10 @@ fn test_no_commit_writes_vendor_msg_and_does_not_commit() {
 #[test]
 fn test_vendor_msg_format_contains_required_sections() {
     let (repo, tmp, _vendor, _old_base_oid, _new_head_oid) =
-        setup_commit_mode_scenario("vmf", CommitMode::Linear);
+        setup_commit_mode_scenario("vmf", History::Linear);
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "vmf", None, true).unwrap();
+        git_vendor::exe::update_one(&repo, "vmf", None, true).unwrap();
     });
 
     let msg_path = repo.path().join("VENDOR_MSG");
@@ -494,15 +494,15 @@ fn test_conflict_vendor_msg_contains_resolution_hint() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(base_oid.to_string()),
-        commit: CommitMode::Linear,
+        history: History::Linear,
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
 
     with_cwd(tmp.path(), || {
-        let outcome = git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        let outcome = git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
         assert!(
             matches!(outcome, git_vendor::exe::MergeOutcome::Conflict { .. }),
             "expected conflict outcome"
@@ -521,7 +521,7 @@ fn test_conflict_vendor_msg_contains_resolution_hint() {
 #[test]
 fn test_base_written_after_staging_not_before_merge() {
     let (repo, tmp, vendor, old_base_oid, _new_head) =
-        setup_commit_mode_scenario("bwrt", CommitMode::Linear);
+        setup_commit_mode_scenario("bwrt", History::Linear);
 
     let gitvendors_before = std::fs::read_to_string(tmp.path().join(".gitvendors")).unwrap();
     assert!(
@@ -531,7 +531,7 @@ fn test_base_written_after_staging_not_before_merge() {
     let _ = vendor;
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "bwrt", None, false).unwrap();
+        git_vendor::exe::update_one(&repo, "bwrt", None, false).unwrap();
     });
 
     let gitvendors_after = std::fs::read_to_string(tmp.path().join(".gitvendors")).unwrap();
@@ -557,10 +557,10 @@ fn test_base_written_after_staging_not_before_merge() {
 #[test]
 fn test_no_commit_with_replay_returns_error() {
     let (repo, tmp, _vendor, _old_base, _new_head) =
-        setup_commit_mode_scenario("ncr", CommitMode::Replay);
+        setup_commit_mode_scenario("ncr", History::Replay);
 
     let result = with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "ncr", None, true)
+        git_vendor::exe::update_one(&repo, "ncr", None, true)
     });
 
     assert!(

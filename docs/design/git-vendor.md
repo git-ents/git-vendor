@@ -30,8 +30,7 @@ Single file: `.gitvendors`, tracked in the repository, using git-config syntax.
     base = a1b2c3d4e5f6
     pattern = src/**:third_party/lua/
     pattern = LICENSE:third_party/lua/
-    authorship = replay
-    license = MIT
+    history = replay
 
 [vendor "sqlite"]
     url = https://github.com/sqlite/sqlite.git
@@ -53,12 +52,9 @@ Single file: `.gitvendors`, tracked in the repository, using git-config syntax.
 - `base` — the upstream commit SHA that the current vendored state corresponds to.
   **Tool-managed.**
   **Never hand-edited.**
-- `authorship` — optional.
+- `history` — optional.
   One of `squash` (default), `linear`, or `replay`.
-  See Authorship Modes below.
-- `license` — optional.
-  Records the upstream license identifier for visibility and audit.
-  Human-edited.
+  See History Modes below.
 
 `base` is the only field the tool writes.
 Everything else is human-edited.
@@ -197,7 +193,7 @@ Update a previously vendored dependency to a newer upstream state.
 4. On success:
    - Update `vendor=` attributes via `refresh_vendor_attrs` (adds new files, removes deleted files).
    - Update `base` in `.gitvendors` to the new upstream commit.
-   - Commit according to the authorship mode (see Authorship Modes below).
+   - Commit according to the history mode (see History Modes below).
 
 ### update --no-commit
 
@@ -228,15 +224,9 @@ Report which vendors have unmerged upstream changes.
 4. `base` is not an ancestor of head: upstream force-pushed.
    Warn loudly.
 
-### check --licenses
+## History Modes
 
-Scan vendored directories for the presence of license files.
-Report any vendor missing one.
-This is audit tooling, not enforcement — it does not block operations.
-
-## Authorship Modes
-
-Three modes, configured per vendor via the `authorship` field.
+Three modes, configured per vendor via the `history` field.
 Increasing traceability from linear to squash to replay.
 
 ### linear
@@ -301,17 +291,6 @@ Upstream-Author: Luiz Henrique de Figueiredo <lhf@lua.org> (3 commits)
 The file is overwritten on each `update --no-commit`.
 It is not tracked in the repository.
 It is deleted on a successful `git vendor commit` or can be manually removed.
-
-## Licensing
-
-git-vendor provides visibility into upstream licenses without interpreting or enforcing them.
-
-- `license` field in `.gitvendors` records the upstream license identifier per vendor.
-- `check --licenses` scans vendored directories for the presence of license files (LICENSE, COPYING, etc.) and reports any vendor missing one.
-- If a vendor's upstream repo has a license file at the root and no pattern includes it, warn on add.
-  Do not block — some licenses don't require the file to travel — but make the user acknowledge it.
-- Optional `notice` command generates a `NOTICE` or `THIRD_PARTY_LICENSES` file aggregating license info from all vendors.
-  For compliance in large projects.
 
 ## Invariants
 

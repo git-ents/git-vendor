@@ -132,14 +132,14 @@ pub enum Command {
         pattern: Vec<String>,
     },
 
-    /// Show which vendors have unmerged upstream changes.
-    Status,
+    /// Show which vendors have upstream changes to apply.
+    Check,
 
     /// Clean up refs/vendor/*/head (and /base) refs that have no corresponding entry in .gitvendors.
     Prune,
 
-    /// Merge upstream changes for a vendor.
-    Merge {
+    /// Update vendor with upstream changes.
+    Update {
         /// Vendor name. Required unless `--all` is given or only one vendor
         /// is configured.
         name: Option<String>,

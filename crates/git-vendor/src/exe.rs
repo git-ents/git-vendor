@@ -5,7 +5,7 @@ use std::path::Path;
 use git_set_attr::SetAttr;
 use git2::Repository;
 
-use crate::CommitMode;
+use crate::History;
 use crate::PatternMapping;
 use crate::Vendor;
 use crate::VendorSource;
@@ -141,51 +141,19 @@ pub fn add(
     let source = VendorSource {
         name: name.to_string(),
         url: url.to_string(),
-        branch: branch.map(String::from),
+        ref_name: branch.map(String::from),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: resolved_patterns,
     };
 
-    // Persist to .gitvendors config (create the file if it doesn't exist yet).
-    {
-        let mut cfg = repo
-            .vendor_config()
-            .or_else(|_| git2::Config::open(&workdir.join(".gitvendors")))?;
-        source.to_config(&mut cfg)?;
-    }
-
-    // Fetch upstream.
+    // Fetch upstream before any writes so collision checks can use the
+    // upstream tree.  fetch_vendor only writes a ref, not config.
     repo.fetch_vendor(&source, None)?;
 
-    // Update base in .gitvendors to the current upstream tip.
-    let vendor_ref = repo.find_reference(&source.head_ref())?;
-    let vendor_commit = vendor_ref.peel_to_commit()?;
-    let updated = VendorSource {
-        name: source.name.clone(),
-        url: source.url.clone(),
-        branch: source.branch.clone(),
-        base: Some(vendor_commit.id().to_string()),
-        commit: source.commit.clone(),
-        patterns: source.patterns.clone(),
-    };
+    // Collision checks — must happen before any write to .gitvendors.
     {
-        let mut cfg = repo.vendor_config()?;
-        updated.to_config(&mut cfg)?;
-    }
-
-    // Also write the base commit OID to refs/vendor/<name>/base.
-    repo.reference(
-        &source.base_ref(),
-        vendor_commit.id(),
-        true,
-        "git-vendor: set initial base ref",
-    )?;
-
-    // Check for overlapping output paths with already-configured vendors.
-    {
-        let existing = repo.list_vendors().unwrap_or_default();
-        let new_mappings = parse_patterns(&updated.patterns);
+        let new_mappings = parse_patterns(&source.patterns);
 
         // Collect all local paths this new vendor would produce.
         let upstream_tree = repo.find_reference(&source.head_ref())?.peel_to_tree()?;
@@ -202,6 +170,7 @@ pub fn add(
         })?;
 
         // Check against every other vendor's output paths.
+        let existing = repo.list_vendors().unwrap_or_default();
         for other in &existing {
             if other.name == name {
                 continue;
@@ -238,7 +207,7 @@ pub fn add(
             }
         }
 
-        // Check for collision with existing non-vendored files in HEAD.
+        // Hard error on collision with existing non-vendored files in HEAD.
         if let Ok(head_commit) = repo.head().and_then(|h| h.peel_to_commit()) {
             if let Ok(head_tree) = head_commit.tree() {
                 for local_path in &new_paths {
@@ -268,6 +237,38 @@ pub fn add(
             }
         }
     }
+
+    // Persist to .gitvendors config (create the file if it doesn't exist yet).
+    {
+        let mut cfg = repo
+            .vendor_config()
+            .or_else(|_| git2::Config::open(&workdir.join(".gitvendors")))?;
+        source.to_config(&mut cfg)?;
+    }
+
+    // Update base in .gitvendors to the current upstream tip.
+    let vendor_ref = repo.find_reference(&source.head_ref())?;
+    let vendor_commit = vendor_ref.peel_to_commit()?;
+    let updated = VendorSource {
+        name: source.name.clone(),
+        url: source.url.clone(),
+        ref_name: source.ref_name.clone(),
+        base: Some(vendor_commit.id().to_string()),
+        history: source.history.clone(),
+        patterns: source.patterns.clone(),
+    };
+    {
+        let mut cfg = repo.vendor_config()?;
+        updated.to_config(&mut cfg)?;
+    }
+
+    // Also write the base commit OID to refs/vendor/<name>/base.
+    repo.reference(
+        &source.base_ref(),
+        vendor_commit.id(),
+        true,
+        &format!("vendor: set merge base for '{}'", source.name),
+    )?;
 
     // Track the stored patterns in .gitattributes.
     repo.track_vendor_pattern(&source)?;
@@ -508,7 +509,7 @@ pub enum VendorState {
 }
 
 /// Check every configured vendor and report its state relative to upstream.
-pub fn status(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
+pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
     let vendors = repo.list_vendors()?;
     let mut out = Vec::with_capacity(vendors.len());
 
@@ -813,13 +814,13 @@ pub enum MergeOutcome {
     },
 }
 
-/// Merge upstream changes for a single vendor.
+/// Update a single vendor with upstream changes.
 ///
 /// Writes the merged result to the working tree and stages it in the index.
 /// Always updates the vendor's `base` in `.gitvendors`.  No commit is created.
 ///
 /// Returns the updated `VendorSource` wrapped in a [`MergeOutcome`].
-pub fn merge_one(
+pub fn update_one(
     repo: &Repository,
     name: &str,
     file_favor: Option<git2::FileFavor>,
@@ -831,11 +832,11 @@ pub fn merge_one(
     merge_vendor(repo, &vendor, file_favor, no_commit)
 }
 
-/// Merge upstream changes for every configured vendor.
+/// Update every configured vendor with upstream changes.
 ///
 /// Returns one `(vendor_name, MergeOutcome)` per vendor, in the order they
 /// were processed.  Processing stops at the first error.
-pub fn merge_all(
+pub fn update_all(
     repo: &Repository,
     file_favor: Option<git2::FileFavor>,
     no_commit: bool,
@@ -923,7 +924,7 @@ fn merge_vendor(
     file_favor: Option<git2::FileFavor>,
     no_commit: bool,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
-    if no_commit && vendor.commit == CommitMode::Replay {
+    if no_commit && vendor.history == History::Replay {
         return Err("--no-commit is incompatible with the `replay` commit mode".into());
     }
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
@@ -950,9 +951,9 @@ fn merge_vendor(
     let updated = VendorSource {
         name: vendor.name.clone(),
         url: vendor.url.clone(),
-        branch: vendor.branch.clone(),
+        ref_name: vendor.ref_name.clone(),
         base: Some(vendor_commit.id().to_string()),
-        commit: vendor.commit.clone(),
+        history: vendor.history.clone(),
         patterns: vendor.patterns.clone(),
     };
 
@@ -1116,7 +1117,7 @@ pub(crate) fn build_vendor_msg(
         .map(|o| o.to_string()[..7].to_string())
         .unwrap_or_else(|| "0000000".to_string());
     let head_short = &head_commit.id().to_string()[..7];
-    let branch = vendor.branch.as_deref().unwrap_or("HEAD");
+    let branch = vendor.ref_name.as_deref().unwrap_or("HEAD");
 
     let commits = collect_upstream_commits(repo, old_base_oid, head_commit)?;
     let authors = author_summary(&commits);
@@ -1184,10 +1185,10 @@ fn commit_vendor_merge(
     old_base_oid: Option<git2::Oid>,
     head_commit: &git2::Commit<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match &vendor.commit {
-        CommitMode::Squash => commit_squash(repo, vendor, old_base_oid, head_commit),
-        CommitMode::Linear => commit_linear(repo, vendor, old_base_oid, head_commit),
-        CommitMode::Replay => commit_replay(repo, vendor, old_base_oid, head_commit),
+    match &vendor.history {
+        History::Squash => commit_squash(repo, vendor, old_base_oid, head_commit),
+        History::Linear => commit_linear(repo, vendor, old_base_oid, head_commit),
+        History::Replay => commit_replay(repo, vendor, old_base_oid, head_commit),
     }
 }
 

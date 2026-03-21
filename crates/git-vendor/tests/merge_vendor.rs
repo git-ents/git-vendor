@@ -179,9 +179,9 @@ fn setup_merge_scenario(
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: patterns.iter().map(|s| s.to_string()).collect(),
     };
 
@@ -269,9 +269,9 @@ fn test_merge_vendor_with_base_clean_merge() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(base_tree_commit.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -328,9 +328,9 @@ fn test_merge_vendor_conflict() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(base_tree_commit.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -436,9 +436,9 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(base_tree_commit.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -507,9 +507,9 @@ fn test_merge_vendor_new_file_at_mapped_path() {
     let vendor = VendorSource {
         name: vendor_name.to_string(),
         url: "https://example.com/upstream.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(base_commit.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**:ext/".to_string()],
     };
 
@@ -552,7 +552,7 @@ fn test_merge_vendor_does_not_include_unattributed_files() {
     write_gitvendors(tmp.path(), &vendor);
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
     });
 
     assert!(

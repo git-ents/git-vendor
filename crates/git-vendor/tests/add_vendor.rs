@@ -161,9 +161,9 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
     let vendor = VendorSource {
         name: "fwdslash".into(),
         url: "https://example.com/fwdslash.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
 
@@ -220,9 +220,9 @@ fn test_add_vendor_nested_paths_match_correctly() {
     let vendor = VendorSource {
         name: "nested".into(),
         url: "https://example.com/nested.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["sub/".into()],
     };
 
@@ -261,9 +261,9 @@ fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
     let vendor = VendorSource {
         name: "mixed".into(),
         url: "https://example.com/mixed.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**:ext/".into(), "docs/**:ext/".into()],
     };
 
@@ -311,9 +311,9 @@ fn test_add_vendor_glob_filtering_with_mapping() {
     let vendor = VendorSource {
         name: "filter".into(),
         url: "https://example.com/filter.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**/*.rs:ext/".into()],
     };
 
@@ -409,9 +409,9 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     let vendor = VendorSource {
         name: "myvendor".into(),
         url: "https://example.com/myvendor.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
 

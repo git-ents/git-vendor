@@ -88,7 +88,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("No vendors configured.");
             } else {
                 for v in &vendors {
-                    let branch = v.branch.as_deref().unwrap_or("(default)");
+                    let branch = v.ref_name.as_deref().unwrap_or("(default)");
                     let base = v.base.as_deref().unwrap_or("(none)");
                     println!(
                         "{}\n  url:    {}\n  branch: {}\n  base:   {}",
@@ -209,8 +209,8 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  git add <file>   # keep file");
         }
 
-        Command::Status => {
-            let statuses = exe::status(&repo)?;
+        Command::Check => {
+            let statuses = exe::check(&repo)?;
             if statuses.is_empty() {
                 println!("No vendors configured.");
             } else {
@@ -251,7 +251,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        Command::Merge {
+        Command::Update {
             name,
             all,
             strategy_option,
@@ -269,7 +269,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut outcomes = Vec::with_capacity(targets.len());
             for t in &targets {
-                let outcome = exe::merge_one(&repo, t, file_favor, *no_commit)?;
+                let outcome = exe::update_one(&repo, t, file_favor, *no_commit)?;
                 outcomes.push((t.clone(), outcome));
             }
 
@@ -303,7 +303,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut outcomes = Vec::with_capacity(targets.len());
             for t in &targets {
-                let outcome = exe::merge_one(&repo, t, file_favor, *no_commit)?;
+                let outcome = exe::update_one(&repo, t, file_favor, *no_commit)?;
                 outcomes.push((t.clone(), outcome));
             }
 

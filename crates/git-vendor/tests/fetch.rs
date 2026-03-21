@@ -127,9 +127,9 @@ fn test_fetch_one_creates_vendor_ref() {
     let vendor = VendorSource {
         name: "upstream".into(),
         url: url.clone(),
-        branch: Some("main".into()),
+        ref_name: Some("main".into()),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -173,9 +173,9 @@ fn test_fetch_one_returns_none_when_already_up_to_date() {
     let vendor = VendorSource {
         name: "up2".into(),
         url: url.clone(),
-        branch: Some("main".into()),
+        ref_name: Some("main".into()),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -226,9 +226,9 @@ fn test_fetch_all_fetches_every_vendor() {
             &VendorSource {
                 name: name.into(),
                 url: url(bare_tmp.path()),
-                branch: Some("main".into()),
+                ref_name: Some("main".into()),
                 base: None,
-                commit: Default::default(),
+                history: Default::default(),
                 patterns: vec!["**".into()],
             },
         );
