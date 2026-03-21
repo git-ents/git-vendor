@@ -122,7 +122,7 @@ fn test_status_up_to_date() {
     };
     write_gitvendors(tmp.path(), &vendor);
 
-    let statuses = with_cwd(tmp.path(), || git_vendor::exe::status(&repo).unwrap());
+    let statuses = with_cwd(tmp.path(), || git_vendor::exe::check(&repo).unwrap());
     assert_eq!(statuses.len(), 1);
     assert!(
         matches!(statuses[0].state, git_vendor::exe::VendorState::UpToDate),
@@ -161,7 +161,7 @@ fn test_status_update_available() {
     };
     write_gitvendors(tmp.path(), &vendor);
 
-    let statuses = with_cwd(tmp.path(), || git_vendor::exe::status(&repo).unwrap());
+    let statuses = with_cwd(tmp.path(), || git_vendor::exe::check(&repo).unwrap());
     assert_eq!(statuses.len(), 1);
     assert!(
         matches!(
@@ -195,7 +195,7 @@ fn test_status_update_available_no_base() {
     };
     write_gitvendors(tmp.path(), &vendor);
 
-    let statuses = with_cwd(tmp.path(), || git_vendor::exe::status(&repo).unwrap());
+    let statuses = with_cwd(tmp.path(), || git_vendor::exe::check(&repo).unwrap());
     assert_eq!(statuses.len(), 1);
     assert!(
         matches!(
@@ -232,7 +232,7 @@ fn test_status_force_pushed() {
     };
     write_gitvendors(tmp.path(), &vendor);
 
-    let statuses = with_cwd(tmp.path(), || git_vendor::exe::status(&repo).unwrap());
+    let statuses = with_cwd(tmp.path(), || git_vendor::exe::check(&repo).unwrap());
     assert_eq!(statuses.len(), 1);
     assert!(
         matches!(
@@ -264,7 +264,7 @@ fn test_status_sorted_by_name() {
         );
     }
 
-    let statuses = with_cwd(tmp.path(), || git_vendor::exe::status(&repo).unwrap());
+    let statuses = with_cwd(tmp.path(), || git_vendor::exe::check(&repo).unwrap());
     let names: Vec<&str> = statuses.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, vec!["aaa", "mmm", "zzz"]);
 }

@@ -508,7 +508,7 @@ pub enum VendorState {
 }
 
 /// Check every configured vendor and report its state relative to upstream.
-pub fn status(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
+pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error::Error>> {
     let vendors = repo.list_vendors()?;
     let mut out = Vec::with_capacity(vendors.len());
 
@@ -813,13 +813,13 @@ pub enum MergeOutcome {
     },
 }
 
-/// Merge upstream changes for a single vendor.
+/// Update a single vendor with upstream changes.
 ///
 /// Writes the merged result to the working tree and stages it in the index.
 /// Always updates the vendor's `base` in `.gitvendors`.  No commit is created.
 ///
 /// Returns the updated `VendorSource` wrapped in a [`MergeOutcome`].
-pub fn merge_one(
+pub fn update_one(
     repo: &Repository,
     name: &str,
     file_favor: Option<git2::FileFavor>,
@@ -831,11 +831,11 @@ pub fn merge_one(
     merge_vendor(repo, &vendor, file_favor, no_commit)
 }
 
-/// Merge upstream changes for every configured vendor.
+/// Update every configured vendor with upstream changes.
 ///
 /// Returns one `(vendor_name, MergeOutcome)` per vendor, in the order they
 /// were processed.  Processing stops at the first error.
-pub fn merge_all(
+pub fn update_all(
     repo: &Repository,
     file_favor: Option<git2::FileFavor>,
     no_commit: bool,

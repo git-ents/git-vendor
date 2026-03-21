@@ -167,7 +167,7 @@ fn test_commit_mode_linear_creates_single_parent_commit() {
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "lin", None, false).unwrap();
+        git_vendor::exe::update_one(&repo, "lin", None, false).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap();
@@ -196,7 +196,7 @@ fn test_commit_mode_squash_creates_merge_commit() {
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "sq", None, false).unwrap();
+        git_vendor::exe::update_one(&repo, "sq", None, false).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap();
@@ -288,7 +288,7 @@ fn test_commit_mode_replay_creates_one_commit_per_upstream() {
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap();
@@ -369,7 +369,7 @@ fn test_commit_mode_replay_preserves_author_identity() {
     }
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
     });
 
     let replayed = repo.head().unwrap().peel_to_commit().unwrap();
@@ -387,7 +387,7 @@ fn test_no_commit_writes_vendor_msg_and_does_not_commit() {
     let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "nc", None, true).unwrap();
+        git_vendor::exe::update_one(&repo, "nc", None, true).unwrap();
     });
 
     let head_after = repo.head().unwrap().peel_to_commit().unwrap().id();
@@ -414,7 +414,7 @@ fn test_vendor_msg_format_contains_required_sections() {
         setup_commit_mode_scenario("vmf", History::Linear);
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "vmf", None, true).unwrap();
+        git_vendor::exe::update_one(&repo, "vmf", None, true).unwrap();
     });
 
     let msg_path = repo.path().join("VENDOR_MSG");
@@ -502,7 +502,7 @@ fn test_conflict_vendor_msg_contains_resolution_hint() {
     write_gitvendors(tmp.path(), &vendor);
 
     with_cwd(tmp.path(), || {
-        let outcome = git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        let outcome = git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
         assert!(
             matches!(outcome, git_vendor::exe::MergeOutcome::Conflict { .. }),
             "expected conflict outcome"
@@ -531,7 +531,7 @@ fn test_base_written_after_staging_not_before_merge() {
     let _ = vendor;
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "bwrt", None, false).unwrap();
+        git_vendor::exe::update_one(&repo, "bwrt", None, false).unwrap();
     });
 
     let gitvendors_after = std::fs::read_to_string(tmp.path().join(".gitvendors")).unwrap();
@@ -560,7 +560,7 @@ fn test_no_commit_with_replay_returns_error() {
         setup_commit_mode_scenario("ncr", History::Replay);
 
     let result = with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, "ncr", None, true)
+        git_vendor::exe::update_one(&repo, "ncr", None, true)
     });
 
     assert!(

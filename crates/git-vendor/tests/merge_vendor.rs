@@ -552,7 +552,7 @@ fn test_merge_vendor_does_not_include_unattributed_files() {
     write_gitvendors(tmp.path(), &vendor);
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::merge_one(&repo, vendor_name, None, false).unwrap();
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
     });
 
     assert!(
