@@ -10,7 +10,6 @@ Source of truth: `docs/design/git-vendor.md`.
 | `history` field in `.gitvendors` | `commit` field | Rename |
 | `update` command | `merge` command | Rename |
 | `check` command | `status` command | Rename |
-| `check --licenses` | not implemented | Add |
 | `--no-commit` writes `.git/VENDOR_MSG` | unverified | Verify / add |
 | `subtree` extraction | unknown | Find and remove or hide |
 
@@ -73,22 +72,7 @@ If `.git/VENDOR_MSG` is not written, add it.
 
 ---
 
-## Phase 4 — `check --licenses`
-
-Add `--licenses` flag to the `check` subcommand.
-
-Behavior:
-
-- For each vendor, resolve its local vendored paths from `.gitattributes`
-- Scan those paths for a license file: `LICENSE`, `LICENSE.*`, `COPYING`, `COPYING.*`, `LICENSE`, `LICENSE.*`
-- Report any vendor with no license file present
-- Audit only — no blocking, no hard errors
-
-Also: on `add`, if the upstream tree root contains a license file and no configured pattern would include it, emit a warning (do not block).
-
----
-
-## Phase 5 — `add` collision invariant
+## Phase 4 — `add` collision invariant
 
 Design invariant 4: collision with an existing non-vendored file on `add` is a hard error.
 
@@ -99,7 +83,7 @@ Verify `add_vendor()`:
 
 ---
 
-## Phase 6 — Remove out-of-scope items
+## Phase 5 — Remove out-of-scope items
 
 Search for any `subtree`, `vendored_subtree`, or contribute-back command/function.
 Remove or leave unexposed (no CLI entry point, no public API).
@@ -112,7 +96,6 @@ Remove or leave unexposed (no CLI entry point, no public API).
 refactor: rename branch→ref, commit→history in VendorSource and config
 refactor: rename merge subcommand → update, status → check
 feat: write .git/VENDOR_MSG on --no-commit
-feat: add check --licenses
 fix: hard-error on non-vendored file collision in add
 chore: remove or hide out-of-scope subtree extraction
 ```
