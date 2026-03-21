@@ -7,7 +7,7 @@ Source of truth: `docs/design/git-vendor.md`.
 | Design | Current | Action |
 |---|---|---|
 | `ref` field in `.gitvendors` | `branch` field | Rename |
-| `authorship` field in `.gitvendors` | `commit` field | Rename |
+| `history` field in `.gitvendors` | `commit` field | Rename |
 | `update` command | `merge` command | Rename |
 | `check` command | `status` command | Rename |
 | `check --licenses` | not implemented | Add |
@@ -27,12 +27,12 @@ Commands not in the design (`list`, `rm`, `track`, `untrack`, `pull`, `prune`) a
 - Config write: emit `ref` key
 - Update all callsites
 
-### 1b. `commit` → `authorship`
+### 1b. `commit` → `history`
 
-- `lib.rs`: rename `VendorSource.commit` → `VendorSource.authorship`
-- Rename type `CommitMode` → `Authorship`
-- Config read: accept `authorship` key; stop accepting `commit`
-- Config write: emit `authorship` key
+- `lib.rs`: rename `VendorSource.commit` → `VendorSource.history`
+- Rename type `CommitMode` → `History`
+- Config read: accept `history` key; stop accepting `commit`
+- Config write: emit `history` key
 - Update all callsites and tests
 
 ---
@@ -69,7 +69,7 @@ Design specifies that `update --no-commit`:
 Verify the current `--no-commit` path does all of this.
 If `.git/VENDOR_MSG` is not written, add it.
 
-`--no-commit` does not apply to `replay` authorship mode — verify this is enforced or error clearly.
+`--no-commit` does not apply to `replay` history mode — verify this is enforced or error clearly.
 
 ---
 
@@ -109,7 +109,7 @@ Remove or leave unexposed (no CLI entry point, no public API).
 ## Suggested commit sequence
 
 ```text
-refactor: rename branch→ref, commit→authorship in VendorSource and config
+refactor: rename branch→ref, commit→history in VendorSource and config
 refactor: rename merge subcommand → update, status → check
 feat: write .git/VENDOR_MSG on --no-commit
 feat: add check --licenses
