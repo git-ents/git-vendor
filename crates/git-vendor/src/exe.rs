@@ -185,6 +185,9 @@ pub fn add(
                         let up = format!("{}{}", dir, entry.name().unwrap_or(""));
                         if let Some(local) = crate::apply_pattern_mappings(&other_mappings, &up) {
                             if new_paths.contains(&local) {
+                                // Signal overlap via a sentinel path so we can
+                                // detect it after the walk (walks can't early-exit
+                                // with an error).
                                 new_paths.insert(format!("\x00overlap:{}", local));
                             }
                         }
@@ -212,6 +215,7 @@ pub fn add(
                         continue;
                     }
                     if head_tree.get_path(Path::new(local_path)).is_ok() {
+                        // File exists in HEAD — check if it belongs to another vendor.
                         let attr = repo.get_attr(
                             Path::new(local_path),
                             "vendor",
@@ -263,7 +267,7 @@ pub fn add(
         &source.base_ref(),
         vendor_commit.id(),
         true,
-        "git-vendor: set initial base ref",
+        &format!("vendor: set merge base for '{}'", source.name),
     )?;
 
     // Track the stored patterns in .gitattributes.
