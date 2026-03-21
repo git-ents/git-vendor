@@ -88,7 +88,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("No vendors configured.");
             } else {
                 for v in &vendors {
-                    let branch = v.branch.as_deref().unwrap_or("(default)");
+                    let branch = v.ref_name.as_deref().unwrap_or("(default)");
                     let base = v.base.as_deref().unwrap_or("(none)");
                     println!(
                         "{}\n  url:    {}\n  branch: {}\n  base:   {}",

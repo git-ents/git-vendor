@@ -115,9 +115,9 @@ fn test_status_up_to_date() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(upstream_oid.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -154,9 +154,9 @@ fn test_status_update_available() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(old_oid.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -188,9 +188,9 @@ fn test_status_update_available_no_base() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -225,9 +225,9 @@ fn test_status_force_pushed() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(base_oid.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -256,9 +256,9 @@ fn test_status_sorted_by_name() {
             &VendorSource {
                 name: name.into(),
                 url: format!("https://example.com/{name}.git"),
-                branch: None,
+                ref_name: None,
                 base: Some(oid.to_string()),
-                commit: Default::default(),
+                history: Default::default(),
                 patterns: vec!["**".into()],
             },
         );

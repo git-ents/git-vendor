@@ -97,9 +97,9 @@ fn test_track_patterns_adds_new_pattern() {
     let vendor = VendorSource {
         name: "tp".into(),
         url: "https://example.com/tp.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -127,9 +127,9 @@ fn test_track_patterns_is_idempotent() {
     let vendor = VendorSource {
         name: "tpi".into(),
         url: "https://example.com/tpi.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -155,9 +155,9 @@ fn test_track_patterns_errors_on_unknown_vendor() {
         &VendorSource {
             name: "real".into(),
             url: "https://example.com/real.git".into(),
-            branch: None,
+            ref_name: None,
             base: None,
-            commit: Default::default(),
+            history: Default::default(),
             patterns: vec![],
         },
     );
@@ -176,9 +176,9 @@ fn test_untrack_patterns_removes_pattern() {
     let vendor = VendorSource {
         name: "utp".into(),
         url: "https://example.com/utp.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**".into(), "docs/**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -206,9 +206,9 @@ fn test_untrack_patterns_noop_for_absent_pattern() {
     let vendor = VendorSource {
         name: "utpn".into(),
         url: "https://example.com/utpn.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["src/**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -230,9 +230,9 @@ fn test_untrack_patterns_errors_on_unknown_vendor() {
         &VendorSource {
             name: "real".into(),
             url: "https://example.com/real.git".into(),
-            branch: None,
+            ref_name: None,
             base: None,
-            commit: Default::default(),
+            history: Default::default(),
             patterns: vec![],
         },
     );
@@ -251,9 +251,9 @@ fn test_track_attrs_writes_vendor_attribute() {
     let vendor = VendorSource {
         name: "ta".into(),
         url: "https://example.com/ta.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -288,9 +288,9 @@ fn test_untrack_attrs_removes_vendor_attribute() {
     let vendor = VendorSource {
         name: "uta".into(),
         url: "https://example.com/uta.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -317,9 +317,9 @@ fn test_untrack_attrs_does_not_remove_other_vendors() {
             &VendorSource {
                 name: name.into(),
                 url: format!("https://example.com/{name}.git"),
-                branch: None,
+                ref_name: None,
                 base: None,
-                commit: Default::default(),
+                history: Default::default(),
                 patterns: vec![],
             },
         );
@@ -359,9 +359,9 @@ fn test_untrack_attrs_noop_when_gitattributes_absent() {
     let vendor = VendorSource {
         name: "v".into(),
         url: "https://example.com/v.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     write_gitvendors(tmp.path(), &vendor);

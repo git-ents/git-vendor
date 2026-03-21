@@ -5,7 +5,7 @@ use std::path::Path;
 use git_set_attr::SetAttr;
 use git2::Repository;
 
-use crate::CommitMode;
+use crate::History;
 use crate::PatternMapping;
 use crate::Vendor;
 use crate::VendorSource;
@@ -141,9 +141,9 @@ pub fn add(
     let source = VendorSource {
         name: name.to_string(),
         url: url.to_string(),
-        branch: branch.map(String::from),
+        ref_name: branch.map(String::from),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: resolved_patterns,
     };
 
@@ -164,9 +164,9 @@ pub fn add(
     let updated = VendorSource {
         name: source.name.clone(),
         url: source.url.clone(),
-        branch: source.branch.clone(),
+        ref_name: source.ref_name.clone(),
         base: Some(vendor_commit.id().to_string()),
-        commit: source.commit.clone(),
+        history: source.history.clone(),
         patterns: source.patterns.clone(),
     };
     {
@@ -923,7 +923,7 @@ fn merge_vendor(
     file_favor: Option<git2::FileFavor>,
     no_commit: bool,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
-    if no_commit && vendor.commit == CommitMode::Replay {
+    if no_commit && vendor.history == History::Replay {
         return Err("--no-commit is incompatible with the `replay` commit mode".into());
     }
     let vendor_ref = repo.find_reference(&vendor.head_ref())?;
@@ -950,9 +950,9 @@ fn merge_vendor(
     let updated = VendorSource {
         name: vendor.name.clone(),
         url: vendor.url.clone(),
-        branch: vendor.branch.clone(),
+        ref_name: vendor.ref_name.clone(),
         base: Some(vendor_commit.id().to_string()),
-        commit: vendor.commit.clone(),
+        history: vendor.history.clone(),
         patterns: vendor.patterns.clone(),
     };
 
@@ -1116,7 +1116,7 @@ pub(crate) fn build_vendor_msg(
         .map(|o| o.to_string()[..7].to_string())
         .unwrap_or_else(|| "0000000".to_string());
     let head_short = &head_commit.id().to_string()[..7];
-    let branch = vendor.branch.as_deref().unwrap_or("HEAD");
+    let branch = vendor.ref_name.as_deref().unwrap_or("HEAD");
 
     let commits = collect_upstream_commits(repo, old_base_oid, head_commit)?;
     let authors = author_summary(&commits);
@@ -1184,10 +1184,10 @@ fn commit_vendor_merge(
     old_base_oid: Option<git2::Oid>,
     head_commit: &git2::Commit<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match &vendor.commit {
-        CommitMode::Squash => commit_squash(repo, vendor, old_base_oid, head_commit),
-        CommitMode::Linear => commit_linear(repo, vendor, old_base_oid, head_commit),
-        CommitMode::Replay => commit_replay(repo, vendor, old_base_oid, head_commit),
+    match &vendor.history {
+        History::Squash => commit_squash(repo, vendor, old_base_oid, head_commit),
+        History::Linear => commit_linear(repo, vendor, old_base_oid, head_commit),
+        History::Replay => commit_replay(repo, vendor, old_base_oid, head_commit),
     }
 }
 

@@ -117,9 +117,9 @@ fn test_rm_removes_gitvendors_entry() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -159,9 +159,9 @@ fn test_rm_deletes_vendor_refs() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -202,9 +202,9 @@ fn test_rm_clears_gitattributes() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -246,9 +246,9 @@ fn test_rm_stages_vendored_files_as_deleted_by_them() {
     let vendor = VendorSource {
         name: "mylib".into(),
         url: "https://example.com/mylib.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec!["**".into()],
     };
     write_gitvendors(tmp.path(), &vendor);
@@ -289,9 +289,9 @@ fn test_rm_errors_on_unknown_vendor() {
         &VendorSource {
             name: "real".into(),
             url: "https://example.com/real.git".into(),
-            branch: None,
+            ref_name: None,
             base: None,
-            commit: Default::default(),
+            history: Default::default(),
             patterns: vec![],
         },
     );
@@ -312,9 +312,9 @@ fn test_prune_removes_refs_not_in_gitvendors() {
         &VendorSource {
             name: "dummy".into(),
             url: "https://example.com/dummy.git".into(),
-            branch: None,
+            ref_name: None,
             base: None,
-            commit: Default::default(),
+            history: Default::default(),
             patterns: vec![],
         },
     );
@@ -345,9 +345,9 @@ fn test_prune_keeps_refs_that_are_in_gitvendors() {
         &VendorSource {
             name: "mylib".into(),
             url: "https://example.com/mylib.git".into(),
-            branch: None,
+            ref_name: None,
             base: Some(oid.to_string()),
-            commit: Default::default(),
+            history: Default::default(),
             patterns: vec!["**".into()],
         },
     );

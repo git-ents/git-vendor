@@ -283,7 +283,7 @@ fn test_list_vendors_returns_all_entries() {
         r#"
 [vendor "alpha"]
     url = https://example.com/alpha.git
-    branch = main
+    ref = main
 
 [vendor "beta"]
     url = https://example.com/beta.git
@@ -296,7 +296,7 @@ fn test_list_vendors_returns_all_entries() {
 
     assert_eq!(vendors.len(), 2);
     assert_eq!(vendors[0].name, "alpha");
-    assert_eq!(vendors[0].branch.as_deref(), Some("main"));
+    assert_eq!(vendors[0].ref_name.as_deref(), Some("main"));
     assert_eq!(vendors[1].name, "beta");
     assert_eq!(
         vendors[1].base.as_deref(),
@@ -331,14 +331,14 @@ fn test_get_vendor_by_name_returns_correct_entry() {
         r#"
 [vendor "widgets"]
     url = https://example.com/widgets.git
-    branch = stable
+    ref = stable
 "#,
     );
 
     let vs = tr.repo.get_vendor_by_name("widgets").unwrap().unwrap();
     assert_eq!(vs.name, "widgets");
     assert_eq!(vs.url, "https://example.com/widgets.git");
-    assert_eq!(vs.branch.as_deref(), Some("stable"));
+    assert_eq!(vs.ref_name.as_deref(), Some("stable"));
     assert!(vs.base.is_none());
 }
 
@@ -364,14 +364,14 @@ fn test_get_vendor_by_name_all_fields_preserved() {
         r#"
 [vendor "full"]
     url = https://example.com/full.git
-    branch = develop
+    ref = develop
     base = 0000000000000000000000000000000000000001
 "#,
     );
 
     let vs = tr.repo.get_vendor_by_name("full").unwrap().unwrap();
     assert_eq!(vs.url, "https://example.com/full.git");
-    assert_eq!(vs.branch.as_deref(), Some("develop"));
+    assert_eq!(vs.ref_name.as_deref(), Some("develop"));
     assert_eq!(
         vs.base.as_deref(),
         Some("0000000000000000000000000000000000000001")
@@ -388,9 +388,9 @@ fn test_find_vendor_base_returns_none_when_no_base() {
     let vs = git_vendor::VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
 
@@ -409,9 +409,9 @@ fn test_find_vendor_base_returns_commit_when_base_exists() {
     let vs = git_vendor::VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some(commit_oid.to_string()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
 
@@ -425,9 +425,9 @@ fn test_find_vendor_base_errors_on_invalid_oid() {
     let vs = git_vendor::VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some("not-a-valid-sha".into()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
 
@@ -441,9 +441,9 @@ fn test_find_vendor_base_errors_on_nonexistent_commit() {
     let vs = git_vendor::VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
 
@@ -674,7 +674,7 @@ fn test_fetch_vendor_explicit_branch() {
         r#"
 [vendor "upstream"]
     url = {url}
-    branch = refs/heads/stable
+    ref = refs/heads/stable
 "#,
         url = remote.url()
     ));
@@ -691,9 +691,9 @@ fn test_fetch_vendor_fails_on_bad_url() {
     let vs = git_vendor::VendorSource {
         name: "broken".into(),
         url: "file:///this/path/does/not/exist".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
 

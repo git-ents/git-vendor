@@ -4,7 +4,7 @@ use git2::Config;
 use std::io::Write;
 use tempfile::{NamedTempFile, TempPath};
 
-use super::{CommitMode, PatternMapping, VendorSource, bail_if_bare, vendors_from_config};
+use super::{History, PatternMapping, VendorSource, bail_if_bare, vendors_from_config};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -31,9 +31,9 @@ fn test_head_ref_simple() {
     let vs = VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/foo/head");
@@ -44,9 +44,9 @@ fn test_head_ref_with_hyphens_and_underscores() {
     let vs = VendorSource {
         name: "my-cool_lib".into(),
         url: "https://example.com/lib.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib/head");
@@ -61,9 +61,9 @@ fn test_tracking_branch_defaults_to_head() {
     let vs = VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "HEAD");
@@ -74,9 +74,9 @@ fn test_tracking_branch_uses_explicit_branch() {
     let vs = VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: Some("main".into()),
+        ref_name: Some("main".into()),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "main");
@@ -87,9 +87,9 @@ fn test_tracking_branch_arbitrary_name() {
     let vs = VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: Some("release/v2".into()),
+        ref_name: Some("release/v2".into()),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     assert_eq!(vs.tracking_branch(), "release/v2");
@@ -105,9 +105,9 @@ fn test_to_config_url_only() {
     let vs = VendorSource {
         name: "foo".into(),
         url: "https://example.com/foo.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -116,7 +116,7 @@ fn test_to_config_url_only() {
         cfg.get_string("vendor.foo.url").unwrap(),
         "https://example.com/foo.git"
     );
-    assert!(cfg.get_string("vendor.foo.branch").is_err());
+    assert!(cfg.get_string("vendor.foo.ref").is_err());
     assert!(cfg.get_string("vendor.foo.base").is_err());
 }
 
@@ -126,9 +126,9 @@ fn test_to_config_with_branch() {
     let vs = VendorSource {
         name: "bar".into(),
         url: "https://example.com/bar.git".into(),
-        branch: Some("develop".into()),
+        ref_name: Some("develop".into()),
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -137,7 +137,7 @@ fn test_to_config_with_branch() {
         cfg.get_string("vendor.bar.url").unwrap(),
         "https://example.com/bar.git"
     );
-    assert_eq!(cfg.get_string("vendor.bar.branch").unwrap(), "develop");
+    assert_eq!(cfg.get_string("vendor.bar.ref").unwrap(), "develop");
     assert!(cfg.get_string("vendor.bar.base").is_err());
 }
 
@@ -147,9 +147,9 @@ fn test_to_config_with_base() {
     let vs = VendorSource {
         name: "baz".into(),
         url: "https://example.com/baz.git".into(),
-        branch: None,
+        ref_name: None,
         base: Some("cafebabe".into()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -158,7 +158,7 @@ fn test_to_config_with_base() {
         cfg.get_string("vendor.baz.url").unwrap(),
         "https://example.com/baz.git"
     );
-    assert!(cfg.get_string("vendor.baz.branch").is_err());
+    assert!(cfg.get_string("vendor.baz.ref").is_err());
     assert_eq!(cfg.get_string("vendor.baz.base").unwrap(), "cafebabe");
 }
 
@@ -168,9 +168,9 @@ fn test_to_config_all_fields() {
     let vs = VendorSource {
         name: "full".into(),
         url: "https://example.com/full.git".into(),
-        branch: Some("stable".into()),
+        ref_name: Some("stable".into()),
         base: Some("deadbeef".into()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
@@ -179,7 +179,7 @@ fn test_to_config_all_fields() {
         cfg.get_string("vendor.full.url").unwrap(),
         "https://example.com/full.git"
     );
-    assert_eq!(cfg.get_string("vendor.full.branch").unwrap(), "stable");
+    assert_eq!(cfg.get_string("vendor.full.ref").unwrap(), "stable");
     assert_eq!(cfg.get_string("vendor.full.base").unwrap(), "deadbeef");
 }
 
@@ -206,7 +206,7 @@ fn test_from_config_minimal() {
 
     assert_eq!(vs.name, "solo");
     assert_eq!(vs.url, "https://example.com/solo.git");
-    assert!(vs.branch.is_none());
+    assert!(vs.ref_name.is_none());
     assert!(vs.base.is_none());
 }
 
@@ -216,14 +216,14 @@ fn test_from_config_with_branch() {
         r#"
 [vendor "alpha"]
     url = https://example.com/alpha.git
-    branch = next
+    ref = next
 "#,
     );
     let vs = VendorSource::from_config(&cfg, "alpha").unwrap().unwrap();
 
     assert_eq!(vs.name, "alpha");
     assert_eq!(vs.url, "https://example.com/alpha.git");
-    assert_eq!(vs.branch.as_deref(), Some("next"));
+    assert_eq!(vs.ref_name.as_deref(), Some("next"));
     assert!(vs.base.is_none());
 }
 
@@ -240,7 +240,7 @@ fn test_from_config_with_base() {
 
     assert_eq!(vs.name, "beta");
     assert_eq!(vs.url, "https://example.com/beta.git");
-    assert!(vs.branch.is_none());
+    assert!(vs.ref_name.is_none());
     assert_eq!(vs.base.as_deref(), Some("1a2b3c4d"));
 }
 
@@ -250,7 +250,7 @@ fn test_from_config_all_fields() {
         r#"
 [vendor "gamma"]
     url = https://example.com/gamma.git
-    branch = release
+    ref = release
     base = 0000ffff
 "#,
     );
@@ -258,7 +258,7 @@ fn test_from_config_all_fields() {
 
     assert_eq!(vs.name, "gamma");
     assert_eq!(vs.url, "https://example.com/gamma.git");
-    assert_eq!(vs.branch.as_deref(), Some("release"));
+    assert_eq!(vs.ref_name.as_deref(), Some("release"));
     assert_eq!(vs.base.as_deref(), Some("0000ffff"));
 }
 
@@ -284,9 +284,9 @@ fn test_config_roundtrip_full() {
     let original = VendorSource {
         name: "roundtrip".into(),
         url: "https://example.com/roundtrip.git".into(),
-        branch: Some("main".into()),
+        ref_name: Some("main".into()),
         base: Some("abc123def456".into()),
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
@@ -297,7 +297,7 @@ fn test_config_roundtrip_full() {
 
     assert_eq!(restored.name, original.name);
     assert_eq!(restored.url, original.url);
-    assert_eq!(restored.branch, original.branch);
+    assert_eq!(restored.ref_name, original.ref_name);
     assert_eq!(restored.base, original.base);
     assert_eq!(restored.patterns, original.patterns);
 }
@@ -308,9 +308,9 @@ fn test_config_roundtrip_optional_fields_absent() {
     let original = VendorSource {
         name: "minimal".into(),
         url: "https://example.com/minimal.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![],
     };
     original.to_config(&mut cfg).unwrap();
@@ -319,7 +319,7 @@ fn test_config_roundtrip_optional_fields_absent() {
 
     assert_eq!(restored.name, original.name);
     assert_eq!(restored.url, original.url);
-    assert!(restored.branch.is_none());
+    assert!(restored.ref_name.is_none());
     assert!(restored.base.is_none());
     assert!(restored.patterns.is_empty());
 }
@@ -330,9 +330,9 @@ fn test_config_roundtrip_patterns_update() {
     let original = VendorSource {
         name: "pat".into(),
         url: "https://example.com/pat.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: Default::default(),
+        history: Default::default(),
         patterns: vec![".config/".into(), ".github/".into()],
     };
     original.to_config(&mut cfg).unwrap();
@@ -360,7 +360,7 @@ fn test_gitvendors_list() {
         r#"
 [vendor "foo"]
     url = https://example.com/foo.git
-    branch = main
+    ref = main
 
 [vendor "bar"]
     url = https://example.com/bar.git
@@ -375,12 +375,12 @@ fn test_gitvendors_list() {
 
     assert_eq!(vendors[0].name, "bar");
     assert_eq!(vendors[0].url, "https://example.com/bar.git");
-    assert_eq!(vendors[0].branch, None);
+    assert_eq!(vendors[0].ref_name, None);
     assert_eq!(vendors[0].base.as_deref(), Some("deadbeef123"));
 
     assert_eq!(vendors[1].name, "foo");
     assert_eq!(vendors[1].url, "https://example.com/foo.git");
-    assert_eq!(vendors[1].branch.as_deref(), Some("main"));
+    assert_eq!(vendors[1].ref_name.as_deref(), Some("main"));
     assert_eq!(vendors[1].base, None);
 }
 
@@ -562,8 +562,8 @@ fn test_local_path_docs_to_upstream() {
 #[test]
 fn test_commit_mode_default_is_squash() {
     assert_eq!(
-        CommitMode::default(),
-        CommitMode::Squash,
+        History::default(),
+        History::Squash,
         "default CommitMode must be Squash"
     );
 }
@@ -574,14 +574,14 @@ fn test_to_config_commit_squash_is_omitted() {
     let vs = VendorSource {
         name: "sq".into(),
         url: "https://example.com/sq.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: CommitMode::Squash,
+        history: History::Squash,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
     assert!(
-        cfg.get_string("vendor.sq.commit").is_err(),
+        cfg.get_string("vendor.sq.history").is_err(),
         "squash (default) must not be written to config"
     );
 }
@@ -592,13 +592,13 @@ fn test_to_config_commit_linear_is_written() {
     let vs = VendorSource {
         name: "lin".into(),
         url: "https://example.com/lin.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: CommitMode::Linear,
+        history: History::Linear,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
-    assert_eq!(cfg.get_string("vendor.lin.commit").unwrap(), "linear");
+    assert_eq!(cfg.get_string("vendor.lin.history").unwrap(), "linear");
 }
 
 #[test]
@@ -607,13 +607,13 @@ fn test_to_config_commit_replay_is_written() {
     let vs = VendorSource {
         name: "rep".into(),
         url: "https://example.com/rep.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: CommitMode::Replay,
+        history: History::Replay,
         patterns: vec![],
     };
     vs.to_config(&mut cfg).unwrap();
-    assert_eq!(cfg.get_string("vendor.rep.commit").unwrap(), "replay");
+    assert_eq!(cfg.get_string("vendor.rep.history").unwrap(), "replay");
 }
 
 #[test]
@@ -625,7 +625,7 @@ fn test_from_config_commit_absent_defaults_to_squash() {
 "#,
     );
     let vs = VendorSource::from_config(&cfg, "sq").unwrap().unwrap();
-    assert_eq!(vs.commit, CommitMode::Squash);
+    assert_eq!(vs.history, History::Squash);
 }
 
 #[test]
@@ -634,11 +634,11 @@ fn test_from_config_commit_linear() {
         r#"
 [vendor "lin"]
     url = https://example.com/lin.git
-    commit = linear
+    history = linear
 "#,
     );
     let vs = VendorSource::from_config(&cfg, "lin").unwrap().unwrap();
-    assert_eq!(vs.commit, CommitMode::Linear);
+    assert_eq!(vs.history, History::Linear);
 }
 
 #[test]
@@ -647,11 +647,11 @@ fn test_from_config_commit_replay() {
         r#"
 [vendor "rep"]
     url = https://example.com/rep.git
-    commit = replay
+    history = replay
 "#,
     );
     let vs = VendorSource::from_config(&cfg, "rep").unwrap().unwrap();
-    assert_eq!(vs.commit, CommitMode::Replay);
+    assert_eq!(vs.history, History::Replay);
 }
 
 #[test]
@@ -660,13 +660,13 @@ fn test_from_config_commit_unknown_falls_back_to_squash() {
         r#"
 [vendor "unk"]
     url = https://example.com/unk.git
-    commit = bogus
+    history = bogus
 "#,
     );
     let vs = VendorSource::from_config(&cfg, "unk").unwrap().unwrap();
     assert_eq!(
-        vs.commit,
-        CommitMode::Squash,
+        vs.history,
+        History::Squash,
         "unrecognized commit value must fall back to Squash"
     );
 }
@@ -677,14 +677,14 @@ fn test_commit_mode_roundtrip_linear() {
     let original = VendorSource {
         name: "rt".into(),
         url: "https://example.com/rt.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: CommitMode::Linear,
+        history: History::Linear,
         patterns: vec![],
     };
     original.to_config(&mut cfg).unwrap();
     let restored = VendorSource::from_config(&cfg, "rt").unwrap().unwrap();
-    assert_eq!(restored.commit, CommitMode::Linear);
+    assert_eq!(restored.history, History::Linear);
 }
 
 #[test]
@@ -693,12 +693,12 @@ fn test_commit_mode_roundtrip_replay() {
     let original = VendorSource {
         name: "rtr".into(),
         url: "https://example.com/rtr.git".into(),
-        branch: None,
+        ref_name: None,
         base: None,
-        commit: CommitMode::Replay,
+        history: History::Replay,
         patterns: vec![],
     };
     original.to_config(&mut cfg).unwrap();
     let restored = VendorSource::from_config(&cfg, "rtr").unwrap().unwrap();
-    assert_eq!(restored.commit, CommitMode::Replay);
+    assert_eq!(restored.history, History::Replay);
 }

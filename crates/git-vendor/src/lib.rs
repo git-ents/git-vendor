@@ -226,7 +226,7 @@ fn build_tree_from_entries<'a>(
 
 /// Controls how upstream commits are recorded in the local history.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub enum CommitMode {
+pub enum History {
     /// Create a merge commit with a synthetic squash commit as the second parent.
     #[default]
     Squash,
@@ -236,20 +236,20 @@ pub enum CommitMode {
     Replay,
 }
 
-impl CommitMode {
+impl History {
     fn as_str(&self) -> &'static str {
         match self {
-            CommitMode::Squash => "squash",
-            CommitMode::Linear => "linear",
-            CommitMode::Replay => "replay",
+            History::Squash => "squash",
+            History::Linear => "linear",
+            History::Replay => "replay",
         }
     }
 
     fn from_str(s: &str) -> Option<Self> {
         match s {
-            "squash" => Some(CommitMode::Squash),
-            "linear" => Some(CommitMode::Linear),
-            "replay" => Some(CommitMode::Replay),
+            "squash" => Some(History::Squash),
+            "linear" => Some(History::Linear),
+            "replay" => Some(History::Replay),
             _ => None,
         }
     }
@@ -264,13 +264,13 @@ pub struct VendorSource {
     /// The branch, tag, or SHA to track on the upstream remote.
     /// Accepts anything that `git fetch` accepts as a refspec source.
     /// If not specified, this defaults to `HEAD`.
-    pub branch: Option<String>,
+    pub ref_name: Option<String>,
     /// The most recent merge base. If not specified,
     /// it is assumed that no prior merge has taken
     /// place and conflicts must be resolved manually.
     pub base: Option<String>,
     /// How upstream commits are recorded in local history.
-    pub commit: CommitMode,
+    pub history: History,
     /// Glob pattern(s) selecting which upstream files to vendor,
     /// optionally with colon-syntax destination mapping (e.g. `src/**:ext/`).
     pub patterns: Vec<String>,
@@ -280,18 +280,18 @@ impl VendorSource {
     pub fn to_config(&self, cfg: &mut git2::Config) -> Result<(), git2::Error> {
         cfg.set_str(&format!("vendor.{}.url", &self.name), &self.url)?;
 
-        if let Some(branch) = &self.branch {
-            cfg.set_str(&format!("vendor.{}.branch", &self.name), branch)?;
+        if let Some(ref_name) = &self.ref_name {
+            cfg.set_str(&format!("vendor.{}.ref", &self.name), ref_name)?;
         }
 
         if let Some(base) = &self.base {
             cfg.set_str(&format!("vendor.{}.base", &self.name), base)?;
         }
 
-        if self.commit != CommitMode::default() {
+        if self.history != History::default() {
             cfg.set_str(
-                &format!("vendor.{}.commit", &self.name),
-                self.commit.as_str(),
+                &format!("vendor.{}.history", &self.name),
+                self.history.as_str(),
             )?;
         }
 
@@ -314,12 +314,12 @@ impl VendorSource {
         }
 
         let url = cfg.get_string(&format!("vendor.{name}.url"))?;
-        let branch = cfg.get_string(&format!("vendor.{name}.branch")).ok();
+        let ref_name = cfg.get_string(&format!("vendor.{name}.ref")).ok();
         let base = cfg.get_string(&format!("vendor.{name}.base")).ok();
-        let commit = cfg
-            .get_string(&format!("vendor.{name}.commit"))
+        let history = cfg
+            .get_string(&format!("vendor.{name}.history"))
             .ok()
-            .and_then(|s| CommitMode::from_str(&s))
+            .and_then(|s| History::from_str(&s))
             .unwrap_or_default();
 
         let mut patterns = Vec::new();
@@ -335,9 +335,9 @@ impl VendorSource {
         Ok(Some(Self {
             name,
             url,
-            branch,
+            ref_name,
             base,
-            commit,
+            history,
             patterns,
         }))
     }
@@ -354,8 +354,8 @@ impl VendorSource {
 
     /// The ref to track.
     pub fn tracking_branch(&self) -> String {
-        match &self.branch {
-            Some(branch) => branch.clone(),
+        match &self.ref_name {
+            Some(r) => r.clone(),
             None => "HEAD".into(),
         }
     }
