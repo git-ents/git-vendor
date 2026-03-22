@@ -342,11 +342,6 @@ impl VendorSource {
         }))
     }
 
-    /// The ref holding the latest fetched upstream tip.
-    pub fn head_ref(&self) -> String {
-        format!("refs/vendor/{}", self.name)
-    }
-
     /// The ref to track.
     pub fn tracking_branch(&self) -> String {
         match &self.ref_name {
@@ -354,6 +349,11 @@ impl VendorSource {
             None => "HEAD".into(),
         }
     }
+}
+
+/// The ref that holds the latest fetched upstream tip for a vendor.
+pub fn vendor_ref(name: &str) -> String {
+    format!("refs/vendor/{}", name)
 }
 
 fn vendors_from_config(cfg: &git2::Config) -> Result<Vec<VendorSource>, git2::Error> {
@@ -501,10 +501,10 @@ impl Vendor for Repository {
         maybe_opts: Option<&mut git2::FetchOptions>,
     ) -> Result<git2::Reference<'a>, git2::Error> {
         let mut remote = self.remote_anonymous(&vendor.url)?;
-        let refspec = format!("{}:{}", vendor.tracking_branch(), vendor.head_ref());
+        let refspec = format!("{}:{}", vendor.tracking_branch(), vendor_ref(&vendor.name));
         remote.fetch(&[&refspec], maybe_opts, None)?;
 
-        let head = self.find_reference(&vendor.head_ref())?;
+        let head = self.find_reference(&vendor_ref(&vendor.name))?;
 
         Ok(head)
     }
@@ -517,7 +517,7 @@ impl Vendor for Repository {
             match vendor.base.as_ref() {
                 Some(base) => {
                     let base = git2::Oid::from_str(base)?;
-                    let head = self.find_reference(&vendor.head_ref())?.target().ok_or(
+                    let head = self.find_reference(&vendor_ref(&vendor.name))?.target().ok_or(
                         git2::Error::from_str("head ref was not found; this is an internal error"),
                     )?;
 
@@ -528,7 +528,7 @@ impl Vendor for Repository {
                     }
                 }
                 None => {
-                    let head = self.find_reference(&vendor.head_ref())?.target().ok_or(
+                    let head = self.find_reference(&vendor_ref(&vendor.name))?.target().ok_or(
                         git2::Error::from_str("head ref was not found; this is an internal error"),
                     )?;
                     updates.insert(vendor, Some(head));
@@ -545,7 +545,7 @@ impl Vendor for Repository {
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
         // Always write to the root .gitattributes.
         let gitattributes = workdir.join(".gitattributes");
-        let tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
         let vendor_attr = format!("vendor={}", vendor.name);
 
         let mappings = parse_patterns(&vendor.patterns);
@@ -580,7 +580,7 @@ impl Vendor for Repository {
 
         // Build the remapped upstream tree: each upstream file is placed at its
         // local (mapped) path according to the pattern mappings.
-        let upstream_tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let upstream_tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
         let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
         // Collect local paths so we can filter HEAD to only overlapping entries.
@@ -625,7 +625,7 @@ impl Vendor for Repository {
         let mappings = parse_patterns(&vendor.patterns);
 
         // UPSTREAM (theirs): remap the upstream tree to local paths via mappings.
-        let upstream_tree = self.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+        let upstream_tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
         let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
         // LOCAL (ours): use gitattributes to determine which files are owned by

@@ -1,5 +1,6 @@
 //! Integration tests for the `Vendor` trait implementation on `git2::Repository`.
 
+use git_vendor::vendor_ref;
 use git_vendor::Vendor;
 use git2::{Repository, Signature};
 use std::fs;
@@ -230,8 +231,7 @@ impl TestRepo {
 
     /// Point `refs/vendor/<name>` at `oid`.
     fn set_vendor_ref(&self, name: &str, oid: git2::Oid) {
-        let refname = format!("refs/vendor/{}", name);
-        self.repo.reference(&refname, oid, true, "test").unwrap();
+        self.repo.reference(&vendor_ref(name), oid, true, "test").unwrap();
     }
 }
 
@@ -624,7 +624,7 @@ fn test_fetch_vendor_creates_vendor_ref() {
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
     let reference = tr.repo.fetch_vendor(&vs, None).unwrap();
 
-    assert_eq!(reference.name(), Some("refs/vendor/upstream"));
+    assert_eq!(reference.name(), Some(vendor_ref("upstream").as_str()));
     assert_eq!(reference.target(), Some(tip));
 }
 

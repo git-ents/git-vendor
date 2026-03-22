@@ -13,6 +13,7 @@ use crate::VendorSource;
 use crate::apply_pattern_mappings;
 use crate::parse_patterns;
 use crate::remap_upstream_tree;
+use crate::vendor_ref;
 
 /// Open a repository from the given path, or from the environment / current
 /// directory when `None` is passed.
@@ -156,7 +157,7 @@ pub fn add(
         let new_mappings = parse_patterns(&source.patterns);
 
         // Collect all local paths this new vendor would produce.
-        let upstream_tree = repo.find_reference(&source.head_ref())?.peel_to_tree()?;
+        let upstream_tree = repo.find_reference(&vendor_ref(&source.name))?.peel_to_tree()?;
         let mut new_paths: HashSet<String> = HashSet::new();
         upstream_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
             if entry.kind() != Some(git2::ObjectType::Blob) {
@@ -176,7 +177,7 @@ pub fn add(
                 continue;
             }
             let other_mappings = parse_patterns(&other.patterns);
-            if let Ok(other_ref) = repo.find_reference(&other.head_ref()) {
+            if let Ok(other_ref) = repo.find_reference(&vendor_ref(&other.name)) {
                 if let Ok(other_tree) = other_ref.peel_to_tree() {
                     other_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
                         if entry.kind() != Some(git2::ObjectType::Blob) {
@@ -247,8 +248,8 @@ pub fn add(
     }
 
     // Update base in .gitvendors to the current upstream tip.
-    let vendor_ref = repo.find_reference(&source.head_ref())?;
-    let vendor_commit = vendor_ref.peel_to_commit()?;
+    let tip = repo.find_reference(&vendor_ref(&source.name))?;
+    let vendor_commit = tip.peel_to_commit()?;
     let updated = VendorSource {
         name: source.name.clone(),
         url: source.url.clone(),
@@ -443,7 +444,7 @@ pub fn fetch_one(
         .get_vendor_by_name(name)?
         .ok_or_else(|| format!("vendor '{}' not found", name))?;
     let old_oid = repo
-        .find_reference(&vendor.head_ref())
+        .find_reference(&vendor_ref(&vendor.name))
         .ok()
         .and_then(|r| r.target());
     let reference = repo.fetch_vendor(&vendor, None)?;
@@ -467,7 +468,7 @@ pub fn fetch_all(
     let mut results = Vec::with_capacity(vendors.len());
     for v in &vendors {
         let old_oid = repo
-            .find_reference(&v.head_ref())
+            .find_reference(&vendor_ref(&v.name))
             .ok()
             .and_then(|r| r.target());
         let reference = repo.fetch_vendor(v, None)?;
@@ -507,7 +508,7 @@ pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error:
 
     for vendor in vendors {
         let head_oid = repo
-            .find_reference(&vendor.head_ref())?
+            .find_reference(&vendor_ref(&vendor.name))?
             .target()
             .ok_or_else(|| {
                 git2::Error::from_str(&format!(
@@ -572,7 +573,7 @@ pub fn rm(repo: &Repository, name: &str) -> Result<(), Box<dyn std::error::Error
     }
 
     // 2. Delete refs/vendor/<name>.
-    if let Ok(mut reference) = repo.find_reference(&vendor.head_ref()) {
+    if let Ok(mut reference) = repo.find_reference(&vendor_ref(&vendor.name)) {
         reference.delete()?;
     }
 
@@ -679,8 +680,7 @@ pub fn prune(repo: &Repository) -> Result<Vec<String>, Box<dyn std::error::Error
     }
 
     for name in &pruned {
-        let refname = format!("refs/vendor/{}", name);
-        if let Ok(mut r) = repo.find_reference(&refname) {
+        if let Ok(mut r) = repo.find_reference(&vendor_ref(name)) {
             r.delete()?;
         }
     }
@@ -908,8 +908,8 @@ fn merge_vendor(
     if no_commit && vendor.history == History::Replay {
         return Err("--no-commit is incompatible with the `replay` commit mode".into());
     }
-    let vendor_ref = repo.find_reference(&vendor.head_ref())?;
-    let vendor_commit = vendor_ref.peel_to_commit()?;
+    let tip = repo.find_reference(&vendor_ref(&vendor.name))?;
+    let vendor_commit = tip.peel_to_commit()?;
 
     // Nothing to do when the base already matches the upstream tip.
     if let Some(base) = &vendor.base
@@ -943,7 +943,7 @@ fn merge_vendor(
     // Refresh .gitattributes: add entries for new upstream files, remove
     // entries for files deleted upstream.  Use the pattern-filtered upstream
     // tree as the authoritative source of which files belong to this vendor.
-    let upstream_tree = repo.find_reference(&vendor.head_ref())?.peel_to_tree()?;
+    let upstream_tree = repo.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
     let mappings = parse_patterns(&vendor.patterns);
     let theirs_remapped = remap_upstream_tree(&repo, &upstream_tree, &mappings)?;
     repo.refresh_vendor_attrs(vendor, &theirs_remapped, Path::new("."))?;

@@ -4,7 +4,7 @@ use git2::Config;
 use std::io::Write;
 use tempfile::{NamedTempFile, TempPath};
 
-use super::{History, PatternMapping, VendorSource, bail_if_bare, vendors_from_config};
+use super::{History, PatternMapping, VendorSource, bail_if_bare, vendor_ref, vendors_from_config};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,33 +23,17 @@ fn empty_config() -> (TempPath, Config) {
 }
 
 // ---------------------------------------------------------------------------
-// VendorSource::head_ref
+// vendor_ref
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_head_ref_simple() {
-    let vs = VendorSource {
-        name: "foo".into(),
-        url: "https://example.com/foo.git".into(),
-        ref_name: None,
-        base: None,
-        history: Default::default(),
-        patterns: vec![],
-    };
-    assert_eq!(vs.head_ref(), "refs/vendor/foo");
+fn test_vendor_ref_simple() {
+    assert_eq!(vendor_ref("foo"), "refs/vendor/foo");
 }
 
 #[test]
-fn test_head_ref_with_hyphens_and_underscores() {
-    let vs = VendorSource {
-        name: "my-cool_lib".into(),
-        url: "https://example.com/lib.git".into(),
-        ref_name: None,
-        base: None,
-        history: Default::default(),
-        patterns: vec![],
-    };
-    assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib");
+fn test_vendor_ref_with_hyphens_and_underscores() {
+    assert_eq!(vendor_ref("my-cool_lib"), "refs/vendor/my-cool_lib");
 }
 
 // ---------------------------------------------------------------------------
