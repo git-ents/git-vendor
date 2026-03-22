@@ -1,6 +1,0 @@
-[vendor "git-rewrite"]
-	url = https://github.com/git-ents/git-rewrite.git
-	base = 8b34dc9ed59b24f909180f9b9308f1909c8f43d5
-	pattern = .config/
-	pattern = .github/
-	pattern = .rules
