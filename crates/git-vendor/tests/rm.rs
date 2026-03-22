@@ -105,7 +105,7 @@ fn test_rm_removes_gitvendors_entry() {
     let (repo, tmp) = init_repo_with_gitattributes("a.txt vendor=mylib\n");
 
     let upstream_tree = build_tree(&repo, &[("a.txt", b"content\n")]);
-    commit_tree_to_ref(&repo, "refs/vendor/mylib/head", &upstream_tree, "tip");
+    commit_tree_to_ref(&repo, "refs/vendor/mylib", &upstream_tree, "tip");
 
     std::fs::write(tmp.path().join("a.txt"), b"content\n").unwrap();
     {
@@ -145,9 +145,7 @@ fn test_rm_deletes_vendor_refs() {
     let (repo, tmp) = init_repo_with_gitattributes("a.txt vendor=mylib\n");
 
     let upstream_tree = build_tree(&repo, &[("a.txt", b"content\n")]);
-    let head_oid = commit_tree_to_ref(&repo, "refs/vendor/mylib/head", &upstream_tree, "tip");
-    repo.reference("refs/vendor/mylib/base", head_oid, false, "base")
-        .unwrap();
+    commit_tree_to_ref(&repo, "refs/vendor/mylib", &upstream_tree, "tip");
 
     std::fs::write(tmp.path().join("a.txt"), b"content\n").unwrap();
     {
@@ -176,12 +174,8 @@ fn test_rm_deletes_vendor_refs() {
     });
 
     assert!(
-        repo.find_reference("refs/vendor/mylib/head").is_err(),
-        "refs/vendor/mylib/head must be deleted"
-    );
-    assert!(
-        repo.find_reference("refs/vendor/mylib/base").is_err(),
-        "refs/vendor/mylib/base must be deleted"
+        repo.find_reference("refs/vendor/mylib").is_err(),
+        "refs/vendor/mylib must be deleted"
     );
 }
 
@@ -190,7 +184,7 @@ fn test_rm_clears_gitattributes() {
     let (repo, tmp) = init_repo_with_gitattributes("a.txt vendor=mylib\nother.txt vendor=other\n");
 
     let upstream_tree = build_tree(&repo, &[("a.txt", b"content\n")]);
-    commit_tree_to_ref(&repo, "refs/vendor/mylib/head", &upstream_tree, "tip");
+    commit_tree_to_ref(&repo, "refs/vendor/mylib", &upstream_tree, "tip");
 
     std::fs::write(tmp.path().join("a.txt"), b"content\n").unwrap();
     {
@@ -234,7 +228,7 @@ fn test_rm_stages_vendored_files_as_deleted_by_them() {
     let (repo, tmp) = init_repo_with_gitattributes("a.txt vendor=mylib\n");
 
     let upstream_tree = build_tree(&repo, &[("a.txt", b"content\n")]);
-    commit_tree_to_ref(&repo, "refs/vendor/mylib/head", &upstream_tree, "tip");
+    commit_tree_to_ref(&repo, "refs/vendor/mylib", &upstream_tree, "tip");
 
     std::fs::write(tmp.path().join("a.txt"), b"content\n").unwrap();
     {
@@ -305,7 +299,7 @@ fn test_prune_removes_refs_not_in_gitvendors() {
     let (repo, tmp) = init_repo_with_gitattributes("");
 
     let tree = build_tree(&repo, &[("f.txt", b"x\n")]);
-    commit_tree_to_ref(&repo, "refs/vendor/stale/head", &tree, "stale tip");
+    commit_tree_to_ref(&repo, "refs/vendor/stale", &tree, "stale tip");
 
     write_gitvendors(
         tmp.path(),
@@ -328,8 +322,8 @@ fn test_prune_removes_refs_not_in_gitvendors() {
         pruned
     );
     assert!(
-        repo.find_reference("refs/vendor/stale/head").is_err(),
-        "refs/vendor/stale/head must be deleted after prune"
+        repo.find_reference("refs/vendor/stale").is_err(),
+        "refs/vendor/stale must be deleted after prune"
     );
 }
 
@@ -338,7 +332,7 @@ fn test_prune_keeps_refs_that_are_in_gitvendors() {
     let (repo, tmp) = init_repo_with_gitattributes("");
 
     let tree = build_tree(&repo, &[("f.txt", b"x\n")]);
-    let oid = commit_tree_to_ref(&repo, "refs/vendor/mylib/head", &tree, "tip");
+    let oid = commit_tree_to_ref(&repo, "refs/vendor/mylib", &tree, "tip");
 
     write_gitvendors(
         tmp.path(),
@@ -360,32 +354,8 @@ fn test_prune_keeps_refs_that_are_in_gitvendors() {
         pruned
     );
     assert!(
-        repo.find_reference("refs/vendor/mylib/head").is_ok(),
-        "refs/vendor/mylib/head must survive prune"
-    );
-}
-
-#[test]
-fn test_prune_also_removes_base_ref() {
-    let (repo, tmp) = init_repo_with_gitattributes("");
-
-    let tree = build_tree(&repo, &[("f.txt", b"x\n")]);
-    let oid = commit_tree_to_ref(&repo, "refs/vendor/old/head", &tree, "tip");
-    repo.reference("refs/vendor/old/base", oid, false, "base")
-        .unwrap();
-
-    std::fs::write(tmp.path().join(".gitvendors"), "").unwrap();
-
-    let pruned = with_cwd(tmp.path(), || git_vendor::exe::prune(&repo).unwrap());
-
-    assert!(pruned.contains(&"old".to_string()));
-    assert!(
-        repo.find_reference("refs/vendor/old/head").is_err(),
-        "head ref must be deleted"
-    );
-    assert!(
-        repo.find_reference("refs/vendor/old/base").is_err(),
-        "base ref must also be deleted"
+        repo.find_reference("refs/vendor/mylib").is_ok(),
+        "refs/vendor/mylib must survive prune"
     );
 }
 

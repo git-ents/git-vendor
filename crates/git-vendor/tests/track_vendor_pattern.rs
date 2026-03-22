@@ -97,7 +97,7 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"aaa"), ("b.txt", b"bbb")]);
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/upstream/head",
+        "refs/vendor/upstream",
         &upstream_tree,
         "vendor tip",
     );
@@ -137,7 +137,7 @@ fn test_track_vendor_pattern_selective_glob() {
         &repo,
         &[("main.rs", b"fn main(){}"), ("README.txt", b"hello")],
     );
-    commit_tree_to_ref(&repo, "refs/vendor/sel/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/sel", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "sel".into(),
@@ -169,7 +169,7 @@ fn test_track_vendor_pattern_nested_directory() {
     let upstream_tree = build_tree(&repo, &[("sub/deep.txt", b"deep")]);
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/nested/head",
+        "refs/vendor/nested",
         &upstream_tree,
         "vendor tip",
     );
@@ -202,7 +202,7 @@ fn test_track_vendor_pattern_nested_directory() {
 fn test_track_vendor_pattern_deep_pattern() {
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("lib/foo.c", b"int main(){}")]);
-    commit_tree_to_ref(&repo, "refs/vendor/pfx/head", &upstream_tree, "vendor tip");
+    commit_tree_to_ref(&repo, "refs/vendor/pfx", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "pfx".into(),
@@ -237,7 +237,7 @@ fn test_track_vendor_pattern_multiple_globs() {
     );
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/multi/head",
+        "refs/vendor/multi",
         &upstream_tree,
         "vendor tip",
     );
@@ -276,7 +276,7 @@ fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     let upstream_tree = build_tree(&repo, &[("data.bin", b"\x00\x01")]);
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/nomatch/head",
+        "refs/vendor/nomatch",
         &upstream_tree,
         "vendor tip",
     );
@@ -314,7 +314,7 @@ fn test_track_vendor_pattern_expands_to_per_file() {
     );
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/expand/head",
+        "refs/vendor/expand",
         &upstream_tree,
         "vendor tip",
     );

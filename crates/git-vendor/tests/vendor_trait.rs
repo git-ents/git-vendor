@@ -228,9 +228,9 @@ impl TestRepo {
         head_oid
     }
 
-    /// Point `refs/vendor/<name>/head` at `oid`.
+    /// Point `refs/vendor/<name>` at `oid`.
     fn set_vendor_ref(&self, name: &str, oid: git2::Oid) {
-        let refname = format!("refs/vendor/{}/head", name);
+        let refname = format!("refs/vendor/{}", name);
         self.repo.reference(&refname, oid, true, "test").unwrap();
     }
 }
@@ -624,7 +624,7 @@ fn test_fetch_vendor_creates_vendor_ref() {
     let vs = tr.repo.get_vendor_by_name("upstream").unwrap().unwrap();
     let reference = tr.repo.fetch_vendor(&vs, None).unwrap();
 
-    assert_eq!(reference.name(), Some("refs/vendor/upstream/head"));
+    assert_eq!(reference.name(), Some("refs/vendor/upstream"));
     assert_eq!(reference.target(), Some(tip));
 }
 

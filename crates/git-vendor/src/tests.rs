@@ -36,7 +36,7 @@ fn test_head_ref_simple() {
         history: Default::default(),
         patterns: vec![],
     };
-    assert_eq!(vs.head_ref(), "refs/vendor/foo/head");
+    assert_eq!(vs.head_ref(), "refs/vendor/foo");
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn test_head_ref_with_hyphens_and_underscores() {
         history: Default::default(),
         patterns: vec![],
     };
-    assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib/head");
+    assert_eq!(vs.head_ref(), "refs/vendor/my-cool_lib");
 }
 
 // ---------------------------------------------------------------------------

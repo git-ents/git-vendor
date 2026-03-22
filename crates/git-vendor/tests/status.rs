@@ -107,7 +107,7 @@ fn test_status_up_to_date() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
     let upstream_oid = commit_tree_to_ref(
         &repo,
-        "refs/vendor/mylib/head",
+        "refs/vendor/mylib",
         &upstream_tree,
         "upstream tip",
     );
@@ -136,13 +136,13 @@ fn test_status_update_available() {
     let (repo, tmp) = init_repo_with_gitattributes("");
 
     let old_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
-    let old_oid = commit_tree_to_ref(&repo, "refs/vendor/mylib/head", &old_tree, "base commit");
+    let old_oid = commit_tree_to_ref(&repo, "refs/vendor/mylib", &old_tree, "base commit");
 
     let new_tree = build_tree(&repo, &[("a.txt", b"v2\n")]);
     let old_commit = repo.find_commit(old_oid).unwrap();
     let new_oid = repo
         .commit(
-            Some("refs/vendor/mylib/head"),
+            Some("refs/vendor/mylib"),
             &test_sig(),
             &test_sig(),
             "upstream v2",
@@ -180,7 +180,7 @@ fn test_status_update_available_no_base() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
     let upstream_oid = commit_tree_to_ref(
         &repo,
-        "refs/vendor/mylib/head",
+        "refs/vendor/mylib",
         &upstream_tree,
         "upstream tip",
     );
@@ -217,7 +217,7 @@ fn test_status_force_pushed() {
     let tree_b = build_tree(&repo, &[("a.txt", b"rewritten\n")]);
     let new_head_oid = commit_tree_to_ref(
         &repo,
-        "refs/vendor/mylib/head",
+        "refs/vendor/mylib",
         &tree_b,
         "force-pushed upstream",
     );
@@ -250,7 +250,7 @@ fn test_status_sorted_by_name() {
 
     for name in ["zzz", "aaa", "mmm"] {
         let tree = build_tree(&repo, &[("f.txt", b"x\n")]);
-        let oid = commit_tree_to_ref(&repo, &format!("refs/vendor/{name}/head"), &tree, "tip");
+        let oid = commit_tree_to_ref(&repo, &format!("refs/vendor/{name}"), &tree, "tip");
         write_gitvendors(
             tmp.path(),
             &VendorSource {

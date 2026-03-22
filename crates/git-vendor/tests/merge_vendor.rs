@@ -170,7 +170,7 @@ fn setup_merge_scenario(
         let upstream_tree = build_tree(&repo, remote_files);
         commit_tree_to_ref(
             &repo,
-            &format!("refs/vendor/{vendor_name}/head"),
+            &format!("refs/vendor/{vendor_name}"),
             &upstream_tree,
             "upstream tip",
         );
@@ -249,7 +249,7 @@ fn test_merge_vendor_with_base_clean_merge() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"line1\nline2\nlineC\n")]);
     commit_tree_to_ref(
         &repo,
-        &format!("refs/vendor/{vendor_name}/head"),
+        &format!("refs/vendor/{vendor_name}"),
         &upstream_tree,
         "upstream change",
     );
@@ -313,7 +313,7 @@ fn test_merge_vendor_conflict() {
         let upstream_tree = build_tree(&repo, &[("f.txt", b"upstream change\n")]);
         commit_tree_to_ref(
             &repo,
-            &format!("refs/vendor/{vendor_name}/head"),
+            &format!("refs/vendor/{vendor_name}"),
             &upstream_tree,
             "upstream edit",
         );
@@ -416,7 +416,7 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
     let upstream_tree = build_tree(&repo, &[("a.txt", b"original\n"), ("b.txt", b"new file\n")]);
     commit_tree_to_ref(
         &repo,
-        &format!("refs/vendor/{vendor_name}/head"),
+        &format!("refs/vendor/{vendor_name}"),
         &upstream_tree,
         "upstream adds b.txt",
     );
@@ -499,7 +499,7 @@ fn test_merge_vendor_new_file_at_mapped_path() {
         .unwrap();
     commit_tree_to_ref(
         &repo,
-        &format!("refs/vendor/{vendor_name}/head"),
+        &format!("refs/vendor/{vendor_name}"),
         &upstream_tree,
         "upstream adds b.rs",
     );

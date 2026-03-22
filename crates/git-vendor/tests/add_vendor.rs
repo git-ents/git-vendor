@@ -212,7 +212,7 @@ fn test_add_vendor_nested_paths_match_correctly() {
     let upstream_tree = build_tree(&repo, &[("sub/overlap.c", b"// upstream v1")]);
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/nested/head",
+        "refs/vendor/nested",
         &upstream_tree,
         "vendor tip",
     );
@@ -253,7 +253,7 @@ fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
     );
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/mixed/head",
+        "refs/vendor/mixed",
         &upstream_tree,
         "vendor tip",
     );
@@ -303,7 +303,7 @@ fn test_add_vendor_glob_filtering_with_mapping() {
     );
     commit_tree_to_ref(
         &repo,
-        "refs/vendor/filter/head",
+        "refs/vendor/filter",
         &upstream_tree,
         "vendor tip",
     );

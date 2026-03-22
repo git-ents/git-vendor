@@ -246,7 +246,7 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("No orphaned vendor refs found.");
             } else {
                 for name in &pruned {
-                    eprintln!("Pruned refs/vendor/{}/{{head,base}}", name);
+                    eprintln!("Pruned refs/vendor/{}", name);
                 }
             }
         }

@@ -262,14 +262,6 @@ pub fn add(
         updated.to_config(&mut cfg)?;
     }
 
-    // Also write the base commit OID to refs/vendor/<name>/base.
-    repo.reference(
-        &source.base_ref(),
-        vendor_commit.id(),
-        true,
-        &format!("vendor: set merge base for '{}'", source.name),
-    )?;
-
     // Track the stored patterns in .gitattributes.
     repo.track_vendor_pattern(&source)?;
 
@@ -519,7 +511,7 @@ pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error:
             .target()
             .ok_or_else(|| {
                 git2::Error::from_str(&format!(
-                    "refs/vendor/{}/head is a symbolic ref; expected a direct ref",
+                    "refs/vendor/{} is a symbolic ref; expected a direct ref",
                     vendor.name
                 ))
             })?;
@@ -553,7 +545,7 @@ pub fn check(repo: &Repository) -> Result<Vec<VendorStatus>, Box<dyn std::error:
 }
 
 /// Remove a vendor source: delete its `.gitvendors` entry, remove its
-/// `refs/vendor/<name>/head` and `refs/vendor/<name>/base` refs, remove matching lines from `.gitattributes`
+/// `refs/vendor/<name>` ref, remove matching lines from `.gitattributes`
 /// files, and mark vendored files as "deleted by them" conflicts in the
 /// index.
 ///
@@ -579,11 +571,8 @@ pub fn rm(repo: &Repository, name: &str) -> Result<(), Box<dyn std::error::Error
         remove_vendor_from_gitvendors(&vendors_path, name)?;
     }
 
-    // 2. Delete refs/vendor/<name>/head and refs/vendor/<name>/base.
+    // 2. Delete refs/vendor/<name>.
     if let Ok(mut reference) = repo.find_reference(&vendor.head_ref()) {
-        reference.delete()?;
-    }
-    if let Ok(mut reference) = repo.find_reference(&vendor.base_ref()) {
         reference.delete()?;
     }
 
@@ -680,26 +669,18 @@ pub fn prune(repo: &Repository) -> Result<Vec<String>, Box<dyn std::error::Error
     let known: HashSet<String> = vendors.into_iter().map(|v| v.name).collect();
 
     let mut pruned = Vec::new();
-    for reference in repo.references_glob("refs/vendor/*/head")? {
+    for reference in repo.references_glob("refs/vendor/*")? {
         let reference = reference?;
         let refname = reference.name().unwrap_or("").to_string();
-        // refname is "refs/vendor/<name>/head"
-        let vendor_name = refname
-            .strip_prefix("refs/vendor/")
-            .and_then(|s| s.strip_suffix("/head"))
-            .unwrap_or("");
+        let vendor_name = refname.strip_prefix("refs/vendor/").unwrap_or("");
         if !vendor_name.is_empty() && !known.contains(vendor_name) {
             pruned.push(vendor_name.to_string());
         }
     }
 
     for name in &pruned {
-        let head_ref = format!("refs/vendor/{}/head", name);
-        if let Ok(mut r) = repo.find_reference(&head_ref) {
-            r.delete()?;
-        }
-        let base_ref = format!("refs/vendor/{}/base", name);
-        if let Ok(mut r) = repo.find_reference(&base_ref) {
+        let refname = format!("refs/vendor/{}", name);
+        if let Ok(mut r) = repo.find_reference(&refname) {
             r.delete()?;
         }
     }
@@ -791,7 +772,7 @@ fn remove_vendor_attrs(workdir: &Path, name: &str) -> Result<(), Box<dyn std::er
 
 /// Result of a single vendor merge.
 pub enum MergeOutcome {
-    /// The vendor's `base` already matches the latest `refs/vendor/$name/head`.
+    /// The vendor's `base` already matches the latest `refs/vendor/$name`.
     /// Nothing was changed.
     UpToDate {
         /// The vendor source (unchanged).
@@ -988,9 +969,9 @@ fn merge_vendor(
 
     let outcome = checkout_and_stage(repo, merged_index, updated)?;
 
-    // Write base to .gitvendors and advance refs/vendor/<name>/base now that
-    // the working tree and index are in a consistent state.  This covers both
-    // clean merges (committed or staged) and conflicts (staged for resolution).
+    // Write base to .gitvendors now that the working tree and index are in a
+    // consistent state.  This covers both clean merges (committed or staged)
+    // and conflicts (staged for resolution).
     {
         let mut cfg = repo.vendor_config()?;
         let updated_vendor = match &outcome {
@@ -999,12 +980,6 @@ fn merge_vendor(
         };
         updated_vendor.to_config(&mut cfg)?;
     }
-    repo.reference(
-        &vendor.base_ref(),
-        vendor_commit.id(),
-        true,
-        "git-vendor: update base ref",
-    )?;
 
     // Stage metadata files that checkout_and_stage does not cover.
     let mut repo_index = repo.index()?;

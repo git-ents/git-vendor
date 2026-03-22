@@ -146,7 +146,7 @@ fn setup_commit_mode_scenario(
     let new_head_oid = {
         let new_upstream_tree = build_tree(&repo, &[("a.txt", b"v1\nv2\n")]);
         repo.commit(
-            Some(&format!("refs/vendor/{vendor_name}/head")),
+            Some(&format!("refs/vendor/{vendor_name}")),
             &test_sig(),
             &test_sig(),
             "upstream v2",
@@ -242,7 +242,7 @@ fn test_commit_mode_replay_creates_one_commit_per_upstream() {
     let new_tree = build_tree(&repo, &[("a.txt", b"v1\nv2\nv3\n")]);
     let new_head_oid = repo
         .commit(
-            Some(&format!("refs/vendor/{vendor_name}/head")),
+            Some(&format!("refs/vendor/{vendor_name}")),
             &test_sig(),
             &test_sig(),
             "up v3",
@@ -326,7 +326,7 @@ fn test_commit_mode_replay_preserves_author_identity() {
     .unwrap();
     let new_tree = build_tree(&repo, &[("f.txt", b"new\n")]);
     repo.commit(
-        Some(&format!("refs/vendor/{vendor_name}/head")),
+        Some(&format!("refs/vendor/{vendor_name}")),
         &upstream_author,
         &upstream_author,
         "upstream change",
@@ -482,7 +482,7 @@ fn test_conflict_vendor_msg_contains_resolution_hint() {
 
     let upstream_tree = build_tree(&repo, &[("f.txt", b"upstream edit\n")]);
     repo.commit(
-        Some(&format!("refs/vendor/{vendor_name}/head")),
+        Some(&format!("refs/vendor/{vendor_name}")),
         &test_sig(),
         &test_sig(),
         "upstream edit",

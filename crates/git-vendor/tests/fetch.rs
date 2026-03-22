@@ -144,11 +144,11 @@ fn test_fetch_one_creates_vendor_ref() {
         "fetch_one must return the new tip OID"
     );
     assert!(
-        repo.find_reference("refs/vendor/upstream/head").is_ok(),
-        "refs/vendor/upstream/head must exist after fetch"
+        repo.find_reference("refs/vendor/upstream").is_ok(),
+        "refs/vendor/upstream must exist after fetch"
     );
     assert_eq!(
-        repo.find_reference("refs/vendor/upstream/head")
+        repo.find_reference("refs/vendor/upstream")
             .unwrap()
             .target()
             .unwrap(),
