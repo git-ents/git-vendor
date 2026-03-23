@@ -453,11 +453,11 @@ fn test_add_detects_overlapping_output_paths() {
     let url2 = up2_tmp.path().to_str().unwrap().to_string();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::add(&repo, "first", &url1, Some("main"), &["**"], None, None).unwrap();
+        git_vendor::exe::add(&repo, "first", &url1, Some("main"), &["**"], None, None, Default::default(), true).unwrap();
     });
 
     let result = with_cwd(tmp.path(), || {
-        git_vendor::exe::add(&repo, "second", &url2, Some("main"), &["**"], None, None)
+        git_vendor::exe::add(&repo, "second", &url2, Some("main"), &["**"], None, None, Default::default(), true)
     });
     assert!(
         result.is_err(),
@@ -500,7 +500,7 @@ fn test_add_detects_collision_with_non_vendored_file() {
     let url = up_tmp.path().to_str().unwrap().to_string();
 
     let result = with_cwd(tmp.path(), || {
-        git_vendor::exe::add(&repo, "coll", &url, Some("main"), &["**"], None, None)
+        git_vendor::exe::add(&repo, "coll", &url, Some("main"), &["**"], None, None, Default::default(), true)
     });
     assert!(
         result.is_err(),
@@ -535,6 +535,8 @@ fn test_add_vendor_upstream_gitattributes_does_not_clobber_tracking() {
             &["**"],
             Some(Path::new("ext")),
             None,
+            Default::default(),
+            true,
         )
         .unwrap();
     });

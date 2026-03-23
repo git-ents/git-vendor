@@ -36,9 +36,8 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 /// Register a new vendor source, fetch its upstream, merge the vendor tree
 /// into the working directory, and stage everything in the index.
 ///
-/// Behaves like `git submodule add`: the vendor files, `.gitvendors`, and
-/// `.gitattributes` are written to the working tree and staged in the index,
-/// but no commit is created.  The caller (or user) is expected to commit.
+/// By default, creates a commit using the vendor's `history` mode (squash,
+/// linear, or replay).  Pass `no_commit: true` to stage without committing.
 ///
 /// Returns the updated `VendorSource` wrapped in a [`MergeOutcome`].
 ///
@@ -50,6 +49,8 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 /// * `path`    – default destination prefix applied to patterns that have no
 ///   explicit colon mapping.  Written into `.gitvendors` as the
 ///   colon syntax so future merges use the same placement.
+/// * `history` – how upstream commits are recorded locally
+/// * `no_commit` – when `true`, stage only (no commit)
 pub fn add(
     repo: &Repository,
     name: &str,
@@ -58,7 +59,12 @@ pub fn add(
     patterns: &[&str],
     path: Option<&Path>,
     file_favor: Option<git2::FileFavor>,
+    history: History,
+    no_commit: bool,
 ) -> Result<MergeOutcome, Box<dyn std::error::Error>> {
+    if no_commit && history == History::Replay {
+        return Err("--no-commit is incompatible with the `replay` history mode".into());
+    }
     if repo.get_vendor_by_name(name)?.is_some() {
         return Err(format!("vendor '{}' already exists", name).into());
     }
@@ -145,7 +151,7 @@ pub fn add(
         url: url.to_string(),
         ref_name: branch.map(String::from),
         base: None,
-        history: Default::default(),
+        history: history.clone(),
         patterns: resolved_patterns,
     };
 
@@ -291,6 +297,26 @@ pub fn add(
         repo_index.add_path(&gitattributes_rel)?;
     }
     repo_index.write()?;
+
+    // Commit unless --no-commit was requested or there are conflicts.
+    match &outcome {
+        MergeOutcome::Clean {
+            vendor: updated_vendor,
+        } => {
+            if no_commit {
+                write_vendor_msg(repo, updated_vendor, None, &vendor_commit, false)?;
+            } else {
+                commit_vendor_merge(repo, updated_vendor, None, &vendor_commit)?;
+            }
+        }
+        MergeOutcome::Conflict {
+            vendor: updated_vendor,
+            ..
+        } => {
+            write_vendor_msg(repo, updated_vendor, None, &vendor_commit, true)?;
+        }
+        MergeOutcome::UpToDate { .. } => unreachable!(),
+    }
 
     Ok(outcome)
 }

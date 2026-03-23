@@ -120,6 +120,8 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             pattern,
             path,
             strategy_option,
+            history,
+            no_commit,
         } => {
             let file_favor = match strategy_option {
                 cli::StrategyOption::Normal => None,
@@ -135,6 +137,8 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &patterns,
                 path.as_deref(),
                 file_favor,
+                history.to_history(),
+                *no_commit,
             )?;
             match outcome {
                 exe::MergeOutcome::UpToDate { .. } => unreachable!("add never produces UpToDate"),

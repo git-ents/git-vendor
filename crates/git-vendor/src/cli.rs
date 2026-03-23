@@ -19,6 +19,29 @@ pub enum StrategyOption {
     Union,
 }
 
+/// Maps to [`crate::History`] for CLI usage.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum HistoryOption {
+    /// Create a merge commit with a synthetic squash commit as the second parent.
+    #[default]
+    Squash,
+    /// Create a single-parent commit on HEAD.
+    Linear,
+    /// Replay each upstream commit individually, preserving authorship.
+    Replay,
+}
+
+impl HistoryOption {
+    /// Convert to the corresponding [`crate::History`].
+    pub fn to_history(self) -> crate::History {
+        match self {
+            HistoryOption::Squash => crate::History::Squash,
+            HistoryOption::Linear => crate::History::Linear,
+            HistoryOption::Replay => crate::History::Replay,
+        }
+    }
+}
+
 impl StrategyOption {
     /// Convert to the corresponding `git2::FileFavor`.
     pub fn to_file_favor(self) -> git2::FileFavor {
@@ -78,6 +101,15 @@ pub enum Command {
         /// Strategy option for resolving conflicting regions during the merge.
         #[arg(short = 'X', long = "strategy-option", value_enum, default_value_t)]
         strategy_option: StrategyOption,
+
+        /// How upstream commits are recorded in local history (squash, linear,
+        /// or replay).  Defaults to squash.
+        #[arg(long, value_enum, default_value_t)]
+        history: HistoryOption,
+
+        /// Stage the merge result without creating a commit.
+        #[arg(long)]
+        no_commit: bool,
     },
 
     /// Fetch the latest upstream commits for one or all vendors.
