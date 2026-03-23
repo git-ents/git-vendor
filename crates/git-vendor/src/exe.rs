@@ -1281,6 +1281,14 @@ fn commit_linear(
 
 /// Replay mode: walk base..head commits and replay each one onto HEAD,
 /// preserving original author identity.
+///
+/// For each upstream commit, performs a three-way merge:
+/// - base: the upstream commit's parent tree, remapped to local paths
+/// - ours: the current local HEAD tree (full repository)
+/// - theirs: the upstream commit's tree, remapped to local paths
+///
+/// This overlays each upstream delta onto the full repository tree,
+/// analogous to `git cherry-pick`.
 fn commit_replay(
     repo: &Repository,
     vendor: &VendorSource,
@@ -1295,14 +1303,40 @@ fn commit_replay(
         return Ok(());
     }
 
+    let mut merge_opts = git2::MergeOptions::new();
+    merge_opts.find_renames(true);
+    merge_opts.rename_threshold(50);
+
     let mut parent_oid = repo.head()?.peel_to_commit()?.id();
 
     for upstream_commit in &commits {
-        let upstream_tree = upstream_commit.tree()?;
-        let remapped_tree = remap_upstream_tree(repo, &upstream_tree, &mappings)?;
+        let theirs = remap_upstream_tree(repo, &upstream_commit.tree()?, &mappings)?;
+
+        // Base: remap the upstream commit's parent tree (or empty for root commits).
+        let base = if upstream_commit.parent_count() > 0 {
+            let parent_tree = upstream_commit.parent(0)?.tree()?;
+            remap_upstream_tree(repo, &parent_tree, &mappings)?
+        } else {
+            let empty_oid = repo.treebuilder(None)?.write()?;
+            repo.find_tree(empty_oid)?
+        };
+
+        let ours = repo.find_commit(parent_oid)?.tree()?;
+
+        let mut merged_index = repo.merge_trees(&base, &ours, &theirs, Some(&merge_opts))?;
+        if merged_index.has_conflicts() {
+            return Err(format!(
+                "conflict while replaying upstream commit {}; \
+                 consider using `squash` or `linear` history mode",
+                &upstream_commit.id().to_string()[..7],
+            )
+            .into());
+        }
+
+        let tree_oid = merged_index.write_tree_to(repo)?;
+        let tree = repo.find_tree(tree_oid)?;
 
         let author = upstream_commit.author();
-        // Preserve original author time; committer is local user with now.
         let author_sig = git2::Signature::new(
             author.name().unwrap_or("Unknown"),
             author.email().unwrap_or(""),
@@ -1317,7 +1351,7 @@ fn commit_replay(
             &author_sig,
             &committer,
             &msg,
-            &remapped_tree,
+            &tree,
             &[&parent_commit],
         )?;
         parent_oid = new_oid;
