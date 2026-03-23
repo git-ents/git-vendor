@@ -306,6 +306,94 @@ fn test_commit_mode_replay_creates_one_commit_per_upstream() {
 }
 
 #[test]
+fn test_commit_mode_replay_preserves_non_vendor_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    let vendor_name = "repkeep";
+
+    // Upstream base commit.
+    let old_tree = build_tree(&repo, &[("lib.txt", b"v1\n")]);
+    let old_base_oid = repo
+        .commit(None, &test_sig(), &test_sig(), "up v1", &old_tree, &[])
+        .unwrap();
+    let old_base_commit = repo.find_commit(old_base_oid).unwrap();
+
+    // Upstream update.
+    let new_tree = build_tree(&repo, &[("lib.txt", b"v2\n")]);
+    repo.commit(
+        Some(&format!("refs/vendor/{vendor_name}")),
+        &test_sig(),
+        &test_sig(),
+        "up v2",
+        &new_tree,
+        &[&old_base_commit],
+    )
+    .unwrap();
+
+    // Local HEAD has both the vendor file and a non-vendor file.
+    let attrs = format!("lib.txt vendor={vendor_name}\n");
+    std::fs::write(tmp.path().join(".gitattributes"), &attrs).unwrap();
+    std::fs::write(tmp.path().join("lib.txt"), b"v1\n").unwrap();
+    std::fs::write(tmp.path().join("local.txt"), b"keep me\n").unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        ref_name: None,
+        base: Some(old_base_oid.to_string()),
+        history: History::Replay,
+        patterns: vec!["**".into()],
+    };
+    write_gitvendors(tmp.path(), &vendor);
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("HEAD"), &test_sig(), &test_sig(), "local HEAD", &tree, &[])
+            .unwrap();
+    }
+
+    with_cwd(tmp.path(), || {
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
+    });
+
+    // The replayed commit must contain both the updated vendor file
+    // and the untouched local file.
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let head_tree = head.tree().unwrap();
+
+    assert!(
+        head_tree.get_path(Path::new("local.txt")).is_ok(),
+        "non-vendor file must survive replay"
+    );
+    assert!(
+        head_tree.get_path(Path::new("lib.txt")).is_ok(),
+        "vendor file must be present after replay"
+    );
+
+    // Verify content.
+    let blob = head_tree
+        .get_path(Path::new("lib.txt"))
+        .unwrap()
+        .to_object(&repo)
+        .unwrap();
+    assert_eq!(blob.as_blob().unwrap().content(), b"v2\n");
+
+    let local_blob = head_tree
+        .get_path(Path::new("local.txt"))
+        .unwrap()
+        .to_object(&repo)
+        .unwrap();
+    assert_eq!(local_blob.as_blob().unwrap().content(), b"keep me\n");
+}
+
+#[test]
 fn test_commit_mode_replay_preserves_author_identity() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = git2::Repository::init(tmp.path()).unwrap();
