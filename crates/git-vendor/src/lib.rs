@@ -445,7 +445,6 @@ pub trait Vendor {
         &self,
         vendor: &VendorSource,
         theirs_tree: &git2::Tree,
-        path: &Path,
     ) -> Result<(), git2::Error>;
 
     /// Fetch the upstream for the given vendor and advance `refs/vendor/$name`.
@@ -481,7 +480,6 @@ pub trait Vendor {
     fn merge_vendor(
         &self,
         vendor: &VendorSource,
-        maybe_opts: Option<&mut git2::FetchOptions>,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error>;
 
@@ -669,7 +667,6 @@ impl Vendor for Repository {
     fn merge_vendor(
         &self,
         vendor: &VendorSource,
-        _maybe_opts: Option<&mut git2::FetchOptions>,
         file_favor: Option<git2::FileFavor>,
     ) -> Result<git2::Index, git2::Error> {
         let mappings = parse_patterns(&vendor.patterns);
@@ -714,7 +711,6 @@ impl Vendor for Repository {
         &self,
         vendor: &VendorSource,
         theirs_tree: &git2::Tree,
-        _path: &Path,
     ) -> Result<(), git2::Error> {
         let workdir = self
             .workdir()

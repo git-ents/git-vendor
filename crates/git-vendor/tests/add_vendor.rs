@@ -168,7 +168,7 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &theirs_tree, Path::new("."))
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree)
             .unwrap();
     });
 
@@ -416,7 +416,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &theirs_tree, Path::new("."))
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree)
             .unwrap();
     });
 
@@ -434,7 +434,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     );
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &theirs_tree, Path::new("."))
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree)
             .unwrap();
     });
 

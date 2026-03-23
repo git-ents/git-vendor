@@ -197,7 +197,7 @@ fn test_merge_vendor_no_base_identical_content() {
         &["**"],
     );
 
-    let index = repo.merge_vendor(&vendor, None, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !index.has_conflicts(),
         "identical content should produce a clean merge"
@@ -213,7 +213,7 @@ fn test_merge_vendor_no_base_upstream_changed() {
         &["**"],
     );
 
-    let index = repo.merge_vendor(&vendor, None, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !index.has_conflicts(),
         "upstream-only change should merge cleanly when no base exists"
@@ -275,7 +275,7 @@ fn test_merge_vendor_with_base_clean_merge() {
         patterns: vec!["**".into()],
     };
 
-    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
+    let idx = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !idx.has_conflicts(),
         "non-overlapping changes should merge cleanly with a base"
@@ -334,7 +334,7 @@ fn test_merge_vendor_conflict() {
         patterns: vec!["**".into()],
     };
 
-    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
+    let idx = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         idx.has_conflicts(),
         "both sides modifying the same region should produce a conflict"
@@ -350,7 +350,7 @@ fn test_merge_vendor_multiple_files() {
         &["**"],
     );
 
-    let index = repo.merge_vendor(&vendor, None, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !index.has_conflicts(),
         "partial upstream update should merge cleanly without a base"
@@ -370,7 +370,7 @@ fn test_merge_vendor_filters_unrelated_upstream_files() {
         &["**/core.rs"],
     );
 
-    let index = repo.merge_vendor(&vendor, None, None).unwrap();
+    let index = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !index.has_conflicts(),
         "unmatched upstream files should be filtered out, leaving a clean merge"
@@ -442,7 +442,7 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
         patterns: vec!["**".into()],
     };
 
-    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
+    let idx = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !idx.has_conflicts(),
         "adding a new file should merge cleanly"
@@ -513,7 +513,7 @@ fn test_merge_vendor_new_file_at_mapped_path() {
         patterns: vec!["src/**:ext/".to_string()],
     };
 
-    let idx = repo.merge_vendor(&vendor, None, None).unwrap();
+    let idx = repo.merge_vendor(&vendor, None).unwrap();
     assert!(
         !idx.has_conflicts(),
         "adding a new file should merge cleanly"
