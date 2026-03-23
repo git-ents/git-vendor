@@ -4,7 +4,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package]
 name = "git-vendor"
-version = "0.2.0"
+version = "1.0.0"
 description = "An in-source vendoring alternative to Git submodules and subtrees."
 repository = "https://github.com/git-ents/git-vendor"
 documentation = "https://docs.rs/git-vendor"
