@@ -512,3 +512,41 @@ fn test_add_detects_collision_with_non_vendored_file() {
         "expected collision error; got: {msg}"
     );
 }
+
+#[test]
+fn test_add_vendor_upstream_gitattributes_does_not_clobber_tracking() {
+    // Use --path ext/ so vendored files land in ext/, including the upstream
+    // .gitattributes at ext/.gitattributes — which is also where vendor
+    // tracking entries are written (common dest dir = "ext").
+    let (repo, tmp) = init_repo_with_gitattributes("");
+
+    let (_upstream, up_tmp) = make_upstream(&[
+        ("lib.rs", b"// code\n"),
+        (".gitattributes", b"*.bin binary\n"),
+    ]);
+    let url = up_tmp.path().to_str().unwrap().to_string();
+
+    with_cwd(tmp.path(), || {
+        git_vendor::exe::add(
+            &repo,
+            "withattr",
+            &url,
+            Some("main"),
+            &["**"],
+            Some(Path::new("ext")),
+            None,
+        )
+        .unwrap();
+    });
+
+    let content =
+        std::fs::read_to_string(tmp.path().join("ext/.gitattributes")).unwrap();
+    assert!(
+        content.contains("vendor=withattr"),
+        "vendor tracking entries must survive; got:\n{content}"
+    );
+    assert!(
+        content.contains("lib.rs"),
+        "lib.rs must be tracked; got:\n{content}"
+    );
+}
