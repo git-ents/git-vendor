@@ -540,12 +540,12 @@ fn test_merge_vendor_new_file_at_mapped_path() {
 }
 
 #[test]
-fn test_merge_vendor_does_not_include_unattributed_files() {
+fn test_merge_vendor_includes_new_upstream_files_matching_patterns() {
     let vendor_name = "selective";
     let (repo, tmp, vendor) = setup_merge_scenario(
         vendor_name,
         &[("owned.txt", b"v1\n")],
-        &[("owned.txt", b"v2\n"), ("unowned.txt", b"secret\n")],
+        &[("owned.txt", b"v2\n"), ("new.txt", b"hello\n")],
         &["**"],
     );
 
@@ -556,9 +556,11 @@ fn test_merge_vendor_does_not_include_unattributed_files() {
     });
 
     assert!(
-        !tmp.path().join("unowned.txt").exists(),
-        "unattributed file must not be introduced by merge_vendor"
+        tmp.path().join("new.txt").exists(),
+        "new upstream file matching patterns must be included"
     );
     let content = std::fs::read_to_string(tmp.path().join("owned.txt")).unwrap();
     assert_eq!(content, "v2\n");
+    let new_content = std::fs::read_to_string(tmp.path().join("new.txt")).unwrap();
+    assert_eq!(new_content, "hello\n");
 }

@@ -958,10 +958,23 @@ fn merge_vendor(
     let theirs_remapped = remap_upstream_tree(&repo, &upstream_tree, &mappings)?;
     repo.refresh_vendor_attrs(vendor, &theirs_remapped)?;
 
-    // Remove any entry from the merged index whose path is not already
-    // attributed to this vendor in HEAD.  New upstream files that match
-    // patterns but have never been attributed must not be introduced into
-    // the working tree automatically.
+    // Stage the refreshed .gitattributes so the INDEX_ONLY lookup below
+    // sees newly-attributed paths (e.g. files added upstream).
+    let dest_dir = common_dest_dir(&parse_patterns(&vendor.patterns));
+    let gitattributes_rel = if dest_dir.is_empty() {
+        std::path::PathBuf::from(".gitattributes")
+    } else {
+        std::path::PathBuf::from(&dest_dir).join(".gitattributes")
+    };
+    if workdir.join(&gitattributes_rel).exists() {
+        let mut idx = repo.index()?;
+        idx.add_path(&gitattributes_rel)?;
+        idx.write()?;
+    }
+
+    // Remove any entry from the merged index whose path is not attributed
+    // to this vendor.  The refresh above ensures new upstream files are
+    // already attributed, so they pass through.
     let expected_vendor = vendor.name.clone();
     let paths_to_remove: Vec<String> = merged_index
         .iter()
