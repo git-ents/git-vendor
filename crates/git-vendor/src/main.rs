@@ -82,17 +82,32 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let repo = exe::open_repo(cli.repo.as_deref())?;
 
     match &cli.command {
-        Command::List => {
+        Command::Status => {
             let vendors = exe::list(&repo)?;
             if vendors.is_empty() {
                 println!("No vendors configured.");
             } else {
+                let statuses = exe::check(&repo)?;
+                let status_map: std::collections::HashMap<&str, &exe::VendorState> = statuses
+                    .iter()
+                    .map(|s| (s.name.as_str(), &s.state))
+                    .collect();
                 for v in &vendors {
                     let branch = v.ref_name.as_deref().unwrap_or("(default)");
                     let base = v.base.as_deref().unwrap_or("(none)");
+                    let state_str = match status_map.get(v.name.as_str()) {
+                        Some(exe::VendorState::UpToDate) => "up to date".to_string(),
+                        Some(exe::VendorState::UpdateAvailable { head }) => {
+                            format!("upstream updated ({})", head)
+                        }
+                        Some(exe::VendorState::ForcePushed { head }) => {
+                            format!("warning: force-pushed ({}); review before merging", head)
+                        }
+                        None => "unknown".to_string(),
+                    };
                     println!(
-                        "{}\n  url:    {}\n  branch: {}\n  base:   {}",
-                        v.name, v.url, branch, base,
+                        "{}: {}\n  url:    {}\n  branch: {}\n  base:   {}",
+                        v.name, state_str, v.url, branch, base,
                     );
                 }
             }
@@ -207,37 +222,6 @@ fn run(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Vendored files are marked as conflicts. Resolve with:");
             eprintln!("  git rm <file>    # accept deletion");
             eprintln!("  git add <file>   # keep file");
-        }
-
-        Command::Check => {
-            let statuses = exe::check(&repo)?;
-            if statuses.is_empty() {
-                println!("No vendors configured.");
-            } else {
-                let mut any_updates = false;
-                for s in &statuses {
-                    match &s.state {
-                        exe::VendorState::UpToDate => {
-                            println!("{}: up to date", s.name);
-                        }
-                        exe::VendorState::UpdateAvailable { head } => {
-                            println!("{}: upstream updated ({})", s.name, head);
-                            any_updates = true;
-                        }
-                        exe::VendorState::ForcePushed { head } => {
-                            eprintln!(
-                                "warning: '{}' upstream was force-pushed ({}); \
-                                 base is no longer an ancestor — review before merging",
-                                s.name, head
-                            );
-                            any_updates = true;
-                        }
-                    }
-                }
-                if !any_updates && statuses.len() > 1 {
-                    println!("\nAll vendors are up to date.");
-                }
-            }
         }
 
         Command::Prune => {

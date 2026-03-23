@@ -50,8 +50,8 @@ pub struct Cli {
 
 #[derive(clap::Subcommand)]
 pub enum Command {
-    /// List all configured vendor sources.
-    List,
+    /// Show configured vendors and their upstream state.
+    Status,
 
     /// Add a new vendor source.
     Add {
@@ -131,9 +131,6 @@ pub enum Command {
         #[arg(short, long)]
         pattern: Vec<String>,
     },
-
-    /// Show which vendors have upstream changes to apply.
-    Check,
 
     /// Clean up refs/vendor/*/head (and /base) refs that have no corresponding entry in .gitvendors.
     Prune,
