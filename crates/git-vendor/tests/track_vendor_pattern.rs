@@ -115,14 +115,14 @@ fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
-        content.contains("lib/a.txt") && content.contains("vendor=upstream"),
-        "expected lib/a.txt vendor=upstream in:\n{content}"
+        content.contains("a.txt") && content.contains("vendor=upstream"),
+        "expected a.txt vendor=upstream in:\n{content}"
     );
     assert!(
-        content.contains("lib/b.txt") && content.contains("vendor=upstream"),
-        "expected lib/b.txt vendor=upstream in:\n{content}"
+        content.contains("b.txt") && content.contains("vendor=upstream"),
+        "expected b.txt vendor=upstream in:\n{content}"
     );
     assert!(
         !content.contains("*.txt"),
@@ -152,10 +152,10 @@ fn test_track_vendor_pattern_selective_glob() {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("src/.gitattributes")).unwrap();
     assert!(
-        content.contains("src/main.rs") && content.contains("vendor=sel"),
-        "expected src/main.rs vendor=sel in:\n{content}"
+        content.contains("main.rs") && content.contains("vendor=sel"),
+        "expected main.rs vendor=sel in:\n{content}"
     );
     assert!(
         !content.contains("README.txt"),
@@ -187,10 +187,10 @@ fn test_track_vendor_pattern_nested_directory() {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("vendor/.gitattributes")).unwrap();
     assert!(
-        content.contains("vendor/deep.txt"),
-        "expected vendor/deep.txt in:\n{content}"
+        content.contains("deep.txt"),
+        "expected deep.txt in:\n{content}"
     );
     assert!(
         content.contains("vendor=nested"),
@@ -217,10 +217,10 @@ fn test_track_vendor_pattern_deep_pattern() {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("third_party/.gitattributes")).unwrap();
     assert!(
-        content.contains("third_party/lib/foo.c") && content.contains("vendor=pfx"),
-        "expected third_party/lib/foo.c vendor=pfx in:\n{content}"
+        content.contains("lib/foo.c") && content.contains("vendor=pfx"),
+        "expected lib/foo.c vendor=pfx in:\n{content}"
     );
 }
 
@@ -255,14 +255,14 @@ fn test_track_vendor_pattern_multiple_globs() {
         repo.track_vendor_pattern(&vendor).unwrap();
     });
 
-    let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("lib/.gitattributes")).unwrap();
     assert!(
-        content.contains("lib/main.rs") && content.contains("vendor=multi"),
-        "expected lib/main.rs vendor=multi in:\n{content}"
+        content.contains("main.rs") && content.contains("vendor=multi"),
+        "expected main.rs vendor=multi in:\n{content}"
     );
     assert!(
-        content.contains("lib/Cargo.toml") && content.contains("vendor=multi"),
-        "expected lib/Cargo.toml vendor=multi in:\n{content}"
+        content.contains("Cargo.toml") && content.contains("vendor=multi"),
+        "expected Cargo.toml vendor=multi in:\n{content}"
     );
     assert!(
         !content.contains("README.txt"),

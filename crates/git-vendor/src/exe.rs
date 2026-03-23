@@ -11,6 +11,7 @@ use crate::Vendor;
 use crate::VendorSource;
 
 use crate::apply_pattern_mappings;
+use crate::common_dest_dir;
 use crate::parse_patterns;
 use crate::remap_upstream_tree;
 use crate::vendor_ref;
@@ -275,10 +276,16 @@ pub fn add(
     let outcome = checkout_and_stage(repo, merged_index, updated)?;
 
     // Stage metadata files that checkout_and_stage does not cover.
+    let dest_dir = common_dest_dir(&parse_patterns(&source.patterns));
+    let gitattributes_rel = if dest_dir.is_empty() {
+        std::path::PathBuf::from(".gitattributes")
+    } else {
+        std::path::PathBuf::from(&dest_dir).join(".gitattributes")
+    };
     let mut repo_index = repo.index()?;
     repo_index.add_path(Path::new(".gitvendors"))?;
-    if workdir.join(".gitattributes").exists() {
-        repo_index.add_path(Path::new(".gitattributes"))?;
+    if workdir.join(&gitattributes_rel).exists() {
+        repo_index.add_path(&gitattributes_rel)?;
     }
     repo_index.write()?;
 
@@ -982,10 +989,16 @@ fn merge_vendor(
     }
 
     // Stage metadata files that checkout_and_stage does not cover.
+    let dest_dir = common_dest_dir(&parse_patterns(&vendor.patterns));
+    let gitattributes_rel = if dest_dir.is_empty() {
+        std::path::PathBuf::from(".gitattributes")
+    } else {
+        std::path::PathBuf::from(&dest_dir).join(".gitattributes")
+    };
     let mut repo_index = repo.index()?;
     repo_index.add_path(Path::new(".gitvendors"))?;
-    if Path::new(".gitattributes").exists() {
-        repo_index.add_path(Path::new(".gitattributes"))?;
+    if gitattributes_rel.exists() {
+        repo_index.add_path(&gitattributes_rel)?;
     }
     repo_index.write()?;
 

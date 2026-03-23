@@ -120,6 +120,39 @@ pub fn parse_patterns(raws: &[impl AsRef<str>]) -> Vec<PatternMapping> {
         .collect()
 }
 
+/// Compute the common destination directory from a slice of pattern mappings.
+///
+/// When all mappings share a common destination prefix (e.g. because `--path
+/// ext/` was used), returns that prefix without a trailing slash.  Falls back
+/// to an empty string (repository root) when there is no shared destination.
+pub(crate) fn common_dest_dir(mappings: &[PatternMapping]) -> String {
+    let dests: Vec<&str> = mappings
+        .iter()
+        .filter_map(|m| m.destination.as_deref())
+        .map(|d| d.trim_end_matches('/'))
+        .collect();
+
+    if dests.is_empty() {
+        return String::new();
+    }
+
+    let first_parts: Vec<&str> = dests[0].split('/').collect();
+    let mut common_len = first_parts.len();
+    for dest in &dests[1..] {
+        let parts: Vec<&str> = dest.split('/').collect();
+        common_len = first_parts[..common_len]
+            .iter()
+            .zip(parts.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if common_len == 0 {
+            break;
+        }
+    }
+
+    first_parts[..common_len].join("/")
+}
+
 /// Build a [`globset::GlobSet`] from a slice of [`PatternMapping`]s, using
 /// only the glob side (left of `:`).
 
@@ -543,12 +576,24 @@ impl Vendor for Repository {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        // Always write to the root .gitattributes.
-        let gitattributes = workdir.join(".gitattributes");
         let tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
         let vendor_attr = format!("vendor={}", vendor.name);
 
         let mappings = parse_patterns(&vendor.patterns);
+
+        // Write .gitattributes into the destination subdirectory when all
+        // patterns share a common prefix (e.g. because --path was used).
+        let dest_dir = common_dest_dir(&mappings);
+        let gitattributes = if dest_dir.is_empty() {
+            workdir.join(".gitattributes")
+        } else {
+            workdir.join(&dest_dir).join(".gitattributes")
+        };
+        let strip_prefix = if dest_dir.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", dest_dir)
+        };
 
         // Collect (local_path) for each upstream file matched by any mapping.
         let mut matched_local_paths: Vec<String> = Vec::new();
@@ -565,7 +610,12 @@ impl Vendor for Repository {
         })?;
 
         for local_path in &matched_local_paths {
-            self.set_attr(local_path, &[&vendor_attr], &gitattributes)?;
+            let pattern = if strip_prefix.is_empty() {
+                local_path.as_str()
+            } else {
+                local_path.strip_prefix(&strip_prefix).unwrap_or(local_path)
+            };
+            self.set_attr(pattern, &[&vendor_attr], &gitattributes)?;
         }
 
         Ok(())
@@ -669,8 +719,20 @@ impl Vendor for Repository {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        let gitattributes = workdir.join(".gitattributes");
         let vendor_attr = format!("vendor={}", vendor.name);
+
+        let mappings = parse_patterns(&vendor.patterns);
+        let dest_dir = common_dest_dir(&mappings);
+        let gitattributes = if dest_dir.is_empty() {
+            workdir.join(".gitattributes")
+        } else {
+            workdir.join(&dest_dir).join(".gitattributes")
+        };
+        let strip_prefix = if dest_dir.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", dest_dir)
+        };
 
         // The authoritative set of vendor-owned paths is exactly the files
         // present in the remapped upstream tree (theirs_tree).  Patterns
@@ -692,8 +754,8 @@ impl Vendor for Repository {
             git2::TreeWalkResult::Ok
         })?;
 
-        // Read existing root .gitattributes, remove stale entries for this
-        // vendor, keep everything else.
+        // Read existing .gitattributes, remove stale entries for this vendor,
+        // keep everything else.
         let needle = format!("vendor={}", vendor.name);
         let mut lines: Vec<String> = if gitattributes.exists() {
             let content = std::fs::read_to_string(&gitattributes)
@@ -711,7 +773,16 @@ impl Vendor for Repository {
         let mut sorted: Vec<_> = owned_paths.into_iter().collect();
         sorted.sort();
         for file in sorted {
-            let line = format!("{} {}", to_git_path(Path::new(&file)), vendor_attr);
+            let git_path = to_git_path(Path::new(&file));
+            let pattern = if strip_prefix.is_empty() {
+                git_path.clone()
+            } else {
+                git_path
+                    .strip_prefix(&strip_prefix)
+                    .unwrap_or(&git_path)
+                    .to_string()
+            };
+            let line = format!("{} {}", pattern, vendor_attr);
             lines.push(line);
         }
 
