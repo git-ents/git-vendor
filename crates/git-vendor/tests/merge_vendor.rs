@@ -564,3 +564,78 @@ fn test_merge_vendor_includes_new_upstream_files_matching_patterns() {
     let new_content = std::fs::read_to_string(tmp.path().join("new.txt")).unwrap();
     assert_eq!(new_content, "hello\n");
 }
+
+#[test]
+fn test_update_stages_gitattributes_when_cwd_differs_from_workdir() {
+    let vendor_name = "subdcwd";
+
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+
+    // Upstream base.
+    let old_tree = build_tree(&repo, &[("lib.rs", b"v1\n")]);
+    let old_base_oid = repo
+        .commit(None, &test_sig(), &test_sig(), "up v1", &old_tree, &[])
+        .unwrap();
+    let old_base = repo.find_commit(old_base_oid).unwrap();
+
+    // Upstream update.
+    let new_tree = build_tree(&repo, &[("lib.rs", b"v2\n")]);
+    repo.commit(
+        Some(&format!("refs/vendor/{vendor_name}")),
+        &test_sig(),
+        &test_sig(),
+        "up v2",
+        &new_tree,
+        &[&old_base],
+    )
+    .unwrap();
+
+    // Local HEAD with vendor files under ext/ and a subdirectory .gitattributes.
+    std::fs::create_dir_all(tmp.path().join("ext")).unwrap();
+    std::fs::write(
+        tmp.path().join("ext/.gitattributes"),
+        format!("lib.rs vendor={vendor_name}\n"),
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("ext/lib.rs"), b"v1\n").unwrap();
+
+    let vendor = VendorSource {
+        name: vendor_name.to_string(),
+        url: "https://example.com/upstream.git".into(),
+        ref_name: None,
+        base: Some(old_base_oid.to_string()),
+        history: Default::default(),
+        patterns: vec!["**:ext/".into()],
+    };
+    write_gitvendors(tmp.path(), &vendor);
+
+    {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("HEAD"), &test_sig(), &test_sig(), "local", &tree, &[])
+            .unwrap();
+    }
+
+    // Run update from a *different* CWD (the system temp dir, not the repo).
+    // Before the fix, gitattributes_rel.exists() checked CWD and would miss
+    // the ext/.gitattributes file.
+    let other_dir = tempfile::tempdir().unwrap();
+    with_cwd(other_dir.path(), || {
+        git_vendor::exe::update_one(&repo, vendor_name, None, false).unwrap();
+    });
+
+    // The ext/.gitattributes must be staged in the index.
+    let index = repo.index().unwrap();
+    assert!(
+        index
+            .get_path(Path::new("ext/.gitattributes"), 0)
+            .is_some(),
+        "ext/.gitattributes must be staged even when CWD differs from workdir"
+    );
+}
