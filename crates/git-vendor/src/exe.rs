@@ -264,16 +264,19 @@ pub fn add(
         updated.to_config(&mut cfg)?;
     }
 
-    // Track the stored patterns in .gitattributes.
-    repo.track_vendor_pattern(&source)?;
-
     // Perform the initial one-time merge using the stored patterns directly,
     // since no vendor files exist in HEAD yet for `merge_vendor` to discover.
     let merged_index = repo.add_vendor(&source, file_favor)?;
 
     // Write merged result (including conflict markers) to the working tree
-    // and stage clean entries.
+    // and stage clean entries.  This must happen before track_vendor_pattern
+    // so that a vendored upstream .gitattributes doesn't overwrite the
+    // tracking entries.
     let outcome = checkout_and_stage(repo, merged_index, updated)?;
+
+    // Track the stored patterns in .gitattributes (after checkout so our
+    // entries are appended on top of any upstream .gitattributes content).
+    repo.track_vendor_pattern(&source)?;
 
     // Stage metadata files that checkout_and_stage does not cover.
     let dest_dir = common_dest_dir(&parse_patterns(&source.patterns));
