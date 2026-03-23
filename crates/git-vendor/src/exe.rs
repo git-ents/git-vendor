@@ -915,6 +915,9 @@ fn merge_vendor(
     if no_commit && vendor.history == History::Replay {
         return Err("--no-commit is incompatible with the `replay` commit mode".into());
     }
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
     let tip = repo.find_reference(&vendor_ref(&vendor.name))?;
     let vendor_commit = tip.peel_to_commit()?;
 
@@ -997,7 +1000,7 @@ fn merge_vendor(
     };
     let mut repo_index = repo.index()?;
     repo_index.add_path(Path::new(".gitvendors"))?;
-    if gitattributes_rel.exists() {
+    if workdir.join(&gitattributes_rel).exists() {
         repo_index.add_path(&gitattributes_rel)?;
     }
     repo_index.write()?;
