@@ -51,6 +51,7 @@ pub fn list(repo: &Repository) -> Result<Vec<VendorSource>, git2::Error> {
 ///   colon syntax so future merges use the same placement.
 /// * `history` – how upstream commits are recorded locally
 /// * `no_commit` – when `true`, stage only (no commit)
+#[allow(clippy::too_many_arguments)]
 pub fn add(
     repo: &Repository,
     name: &str,
@@ -164,7 +165,9 @@ pub fn add(
         let new_mappings = parse_patterns(&source.patterns);
 
         // Collect all local paths this new vendor would produce.
-        let upstream_tree = repo.find_reference(&vendor_ref(&source.name))?.peel_to_tree()?;
+        let upstream_tree = repo
+            .find_reference(&vendor_ref(&source.name))?
+            .peel_to_tree()?;
         let mut new_paths: HashSet<String> = HashSet::new();
         upstream_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
             if entry.kind() != Some(git2::ObjectType::Blob) {
@@ -184,61 +187,61 @@ pub fn add(
                 continue;
             }
             let other_mappings = parse_patterns(&other.patterns);
-            if let Ok(other_ref) = repo.find_reference(&vendor_ref(&other.name)) {
-                if let Ok(other_tree) = other_ref.peel_to_tree() {
-                    other_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-                        if entry.kind() != Some(git2::ObjectType::Blob) {
-                            return git2::TreeWalkResult::Ok;
-                        }
-                        let up = format!("{}{}", dir, entry.name().unwrap_or(""));
-                        if let Some(local) = crate::apply_pattern_mappings(&other_mappings, &up) {
-                            if new_paths.contains(&local) {
-                                // Signal overlap via a sentinel path so we can
-                                // detect it after the walk (walks can't early-exit
-                                // with an error).
-                                new_paths.insert(format!("\x00overlap:{}", local));
-                            }
-                        }
-                        git2::TreeWalkResult::Ok
-                    })?;
-                    for path in &new_paths {
-                        if let Some(overlap) = path.strip_prefix("\x00overlap:") {
-                            return Err(format!(
-                                "vendor '{}' and '{}' both map to output path '{}'; \
-                                 overlapping output paths are not allowed",
-                                name, other.name, overlap
-                            )
-                            .into());
-                        }
+            if let Ok(other_ref) = repo.find_reference(&vendor_ref(&other.name))
+                && let Ok(other_tree) = other_ref.peel_to_tree()
+            {
+                other_tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+                    if entry.kind() != Some(git2::ObjectType::Blob) {
+                        return git2::TreeWalkResult::Ok;
+                    }
+                    let up = format!("{}{}", dir, entry.name().unwrap_or(""));
+                    if let Some(local) = crate::apply_pattern_mappings(&other_mappings, &up)
+                        && new_paths.contains(&local)
+                    {
+                        // Signal overlap via a sentinel path so we can
+                        // detect it after the walk (walks can't early-exit
+                        // with an error).
+                        new_paths.insert(format!("\x00overlap:{}", local));
+                    }
+                    git2::TreeWalkResult::Ok
+                })?;
+                for path in &new_paths {
+                    if let Some(overlap) = path.strip_prefix("\x00overlap:") {
+                        return Err(format!(
+                            "vendor '{}' and '{}' both map to output path '{}'; \
+                             overlapping output paths are not allowed",
+                            name, other.name, overlap
+                        )
+                        .into());
                     }
                 }
             }
         }
 
         // Hard error on collision with existing non-vendored files in HEAD.
-        if let Ok(head_commit) = repo.head().and_then(|h| h.peel_to_commit()) {
-            if let Ok(head_tree) = head_commit.tree() {
-                for local_path in &new_paths {
-                    if local_path.starts_with('\x00') {
-                        continue;
-                    }
-                    if head_tree.get_path(Path::new(local_path)).is_ok() {
-                        // File exists in HEAD — check if it belongs to another vendor.
-                        let attr = repo.get_attr(
-                            Path::new(local_path),
-                            "vendor",
-                            git2::AttrCheckFlags::FILE_THEN_INDEX,
-                        );
-                        match attr {
-                            Ok(Some(_)) => {} // already vendored, ok
-                            _ => {
-                                return Err(format!(
-                                    "file '{}' already exists and is not vendored; \
-                                     cannot add vendor '{}' without first removing it",
-                                    local_path, name
-                                )
-                                .into());
-                            }
+        if let Ok(head_commit) = repo.head().and_then(|h| h.peel_to_commit())
+            && let Ok(head_tree) = head_commit.tree()
+        {
+            for local_path in &new_paths {
+                if local_path.starts_with('\x00') {
+                    continue;
+                }
+                if head_tree.get_path(Path::new(local_path)).is_ok() {
+                    // File exists in HEAD — check if it belongs to another vendor.
+                    let attr = repo.get_attr(
+                        Path::new(local_path),
+                        "vendor",
+                        git2::AttrCheckFlags::FILE_THEN_INDEX,
+                    );
+                    match attr {
+                        Ok(Some(_)) => {} // already vendored, ok
+                        _ => {
+                            return Err(format!(
+                                "file '{}' already exists and is not vendored; \
+                                 cannot add vendor '{}' without first removing it",
+                                local_path, name
+                            )
+                            .into());
                         }
                     }
                 }
@@ -982,9 +985,11 @@ fn merge_vendor(
     // Refresh .gitattributes: add entries for new upstream files, remove
     // entries for files deleted upstream.  Use the pattern-filtered upstream
     // tree as the authoritative source of which files belong to this vendor.
-    let upstream_tree = repo.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
+    let upstream_tree = repo
+        .find_reference(&vendor_ref(&vendor.name))?
+        .peel_to_tree()?;
     let mappings = parse_patterns(&vendor.patterns);
-    let theirs_remapped = remap_upstream_tree(&repo, &upstream_tree, &mappings)?;
+    let theirs_remapped = remap_upstream_tree(repo, &upstream_tree, &mappings)?;
     repo.refresh_vendor_attrs(vendor, &theirs_remapped)?;
 
     // Stage the refreshed .gitattributes so the INDEX_ONLY lookup below

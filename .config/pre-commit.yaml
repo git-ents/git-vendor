@@ -24,3 +24,17 @@ repos:
     hooks:
       - id: committed
         args: [--config, .config/committed.toml, --commit-file]
+  - repo: local
+    hooks:
+      - id: fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all --
+        types: [rust]
+        pass_filenames: false
+      - id: clippy
+        name: cargo clippy
+        language: system
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        types: [rust]
+        pass_filenames: false

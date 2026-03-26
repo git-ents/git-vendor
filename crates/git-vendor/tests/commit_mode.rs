@@ -357,8 +357,15 @@ fn test_commit_mode_replay_preserves_non_vendor_files() {
         index.write().unwrap();
         let tree_oid = index.write_tree().unwrap();
         let tree = repo.find_tree(tree_oid).unwrap();
-        repo.commit(Some("HEAD"), &test_sig(), &test_sig(), "local HEAD", &tree, &[])
-            .unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &test_sig(),
+            &test_sig(),
+            "local HEAD",
+            &tree,
+            &[],
+        )
+        .unwrap();
     }
 
     with_cwd(tmp.path(), || {

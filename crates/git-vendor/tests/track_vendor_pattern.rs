@@ -97,12 +97,7 @@ fn commit_tree_to_ref(
 fn test_track_vendor_pattern_root_glob_expands_to_per_file() {
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("a.txt", b"aaa"), ("b.txt", b"bbb")]);
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/upstream",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/upstream", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "upstream".into(),
@@ -169,12 +164,7 @@ fn test_track_vendor_pattern_selective_glob() {
 fn test_track_vendor_pattern_nested_directory() {
     let (repo, tmp) = init_repo_with_gitattributes("");
     let upstream_tree = build_tree(&repo, &[("sub/deep.txt", b"deep")]);
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/nested",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/nested", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "nested".into(),
@@ -237,12 +227,7 @@ fn test_track_vendor_pattern_multiple_globs() {
             ("README.txt", b"hello"),
         ],
     );
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/multi",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/multi", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "multi".into(),
@@ -276,12 +261,7 @@ fn test_track_vendor_pattern_multiple_globs() {
 fn test_track_vendor_pattern_no_match_leaves_gitattributes_unchanged() {
     let (repo, tmp) = init_repo_with_gitattributes("# existing\n");
     let upstream_tree = build_tree(&repo, &[("data.bin", b"\x00\x01")]);
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/nomatch",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/nomatch", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "nomatch".into(),
@@ -314,12 +294,7 @@ fn test_track_vendor_pattern_expands_to_per_file() {
             ("README.md", b"# hi"),
         ],
     );
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/expand",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/expand", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "expand".into(),

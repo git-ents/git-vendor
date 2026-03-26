@@ -261,7 +261,7 @@ fn test_rm_stages_vendored_files_as_deleted_by_them() {
     let index = repo.index().unwrap();
     let stages: Vec<u16> = index
         .iter()
-        .filter(|e| std::str::from_utf8(&e.path).map_or(false, |p| p == "a.txt"))
+        .filter(|e| std::str::from_utf8(&e.path) == Ok("a.txt"))
         .map(|e| (e.flags >> 12) & 0x3)
         .collect();
 

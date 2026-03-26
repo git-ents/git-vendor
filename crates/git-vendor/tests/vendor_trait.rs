@@ -2,8 +2,8 @@
 
 mod common;
 
-use git_vendor::vendor_ref;
 use git_vendor::Vendor;
+use git_vendor::vendor_ref;
 use git2::{Repository, Signature};
 use std::fs;
 use std::path::Path;
@@ -213,7 +213,7 @@ impl TestRepo {
         let sig = self.sig();
         let tree = self.repo.find_tree(tree_oid).unwrap();
 
-        let head_oid = match self.repo.head() {
+        match self.repo.head() {
             Ok(head) => {
                 let parent = head.peel_to_commit().unwrap();
                 self.repo
@@ -226,14 +226,14 @@ impl TestRepo {
                     .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
                     .unwrap()
             }
-        };
-
-        head_oid
+        }
     }
 
     /// Point `refs/vendor/<name>` at `oid`.
     fn set_vendor_ref(&self, name: &str, oid: git2::Oid) {
-        self.repo.reference(&vendor_ref(name), oid, true, "test").unwrap();
+        self.repo
+            .reference(&vendor_ref(name), oid, true, "test")
+            .unwrap();
     }
 }
 

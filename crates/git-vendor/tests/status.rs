@@ -107,12 +107,8 @@ fn test_status_up_to_date() {
     let (repo, tmp) = init_repo_with_gitattributes("");
 
     let upstream_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
-    let upstream_oid = commit_tree_to_ref(
-        &repo,
-        "refs/vendor/mylib",
-        &upstream_tree,
-        "upstream tip",
-    );
+    let upstream_oid =
+        commit_tree_to_ref(&repo, "refs/vendor/mylib", &upstream_tree, "upstream tip");
 
     let vendor = VendorSource {
         name: "mylib".into(),
@@ -180,12 +176,8 @@ fn test_status_update_available_no_base() {
     let (repo, tmp) = init_repo_with_gitattributes("");
 
     let upstream_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
-    let upstream_oid = commit_tree_to_ref(
-        &repo,
-        "refs/vendor/mylib",
-        &upstream_tree,
-        "upstream tip",
-    );
+    let upstream_oid =
+        commit_tree_to_ref(&repo, "refs/vendor/mylib", &upstream_tree, "upstream tip");
 
     let vendor = VendorSource {
         name: "mylib".into(),
@@ -217,12 +209,8 @@ fn test_status_force_pushed() {
     let base_oid = commit_tree_to_ref(&repo, "refs/tmp/base", &tree_a, "original upstream");
 
     let tree_b = build_tree(&repo, &[("a.txt", b"rewritten\n")]);
-    let new_head_oid = commit_tree_to_ref(
-        &repo,
-        "refs/vendor/mylib",
-        &tree_b,
-        "force-pushed upstream",
-    );
+    let new_head_oid =
+        commit_tree_to_ref(&repo, "refs/vendor/mylib", &tree_b, "force-pushed upstream");
 
     let vendor = VendorSource {
         name: "mylib".into(),

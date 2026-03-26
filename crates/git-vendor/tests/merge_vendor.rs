@@ -635,9 +635,7 @@ fn test_update_stages_gitattributes_when_cwd_differs_from_workdir() {
     // The ext/.gitattributes must be staged in the index.
     let index = repo.index().unwrap();
     assert!(
-        index
-            .get_path(Path::new("ext/.gitattributes"), 0)
-            .is_some(),
+        index.get_path(Path::new("ext/.gitattributes"), 0).is_some(),
         "ext/.gitattributes must be staged even when CWD differs from workdir"
     );
 }

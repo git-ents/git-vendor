@@ -170,8 +170,7 @@ fn test_refresh_vendor_attrs_uses_forward_slashes() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &theirs_tree)
-            .unwrap();
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -212,12 +211,7 @@ fn test_add_vendor_nested_paths_match_correctly() {
     }
 
     let upstream_tree = build_tree(&repo, &[("sub/overlap.c", b"// upstream v1")]);
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/nested",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/nested", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "nested".into(),
@@ -253,12 +247,7 @@ fn test_add_vendor_multi_pattern_mixed_mapped_unmapped() {
             ("docs/guide.md", b"# Guide"),
         ],
     );
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/mixed",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/mixed", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "mixed".into(),
@@ -303,12 +292,7 @@ fn test_add_vendor_glob_filtering_with_mapping() {
             ("other/data.bin", b"\x00\x01\x02"),
         ],
     );
-    commit_tree_to_ref(
-        &repo,
-        "refs/vendor/filter",
-        &upstream_tree,
-        "vendor tip",
-    );
+    commit_tree_to_ref(&repo, "refs/vendor/filter", &upstream_tree, "vendor tip");
 
     let vendor = VendorSource {
         name: "filter".into(),
@@ -418,8 +402,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     };
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &theirs_tree)
-            .unwrap();
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree).unwrap();
     });
 
     let content = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -436,8 +419,7 @@ fn test_refresh_vendor_attrs_ordering_is_consistent() {
     );
 
     with_cwd(tmp.path(), || {
-        repo.refresh_vendor_attrs(&vendor, &theirs_tree)
-            .unwrap();
+        repo.refresh_vendor_attrs(&vendor, &theirs_tree).unwrap();
     });
 
     let content2 = std::fs::read_to_string(tmp.path().join(".gitattributes")).unwrap();
@@ -455,11 +437,32 @@ fn test_add_detects_overlapping_output_paths() {
     let url2 = up2_tmp.path().to_str().unwrap().to_string();
 
     with_cwd(tmp.path(), || {
-        git_vendor::exe::add(&repo, "first", &url1, Some("main"), &["**"], None, None, Default::default(), true).unwrap();
+        git_vendor::exe::add(
+            &repo,
+            "first",
+            &url1,
+            Some("main"),
+            &["**"],
+            None,
+            None,
+            Default::default(),
+            true,
+        )
+        .unwrap();
     });
 
     let result = with_cwd(tmp.path(), || {
-        git_vendor::exe::add(&repo, "second", &url2, Some("main"), &["**"], None, None, Default::default(), true)
+        git_vendor::exe::add(
+            &repo,
+            "second",
+            &url2,
+            Some("main"),
+            &["**"],
+            None,
+            None,
+            Default::default(),
+            true,
+        )
     });
     assert!(
         result.is_err(),
@@ -502,7 +505,17 @@ fn test_add_detects_collision_with_non_vendored_file() {
     let url = up_tmp.path().to_str().unwrap().to_string();
 
     let result = with_cwd(tmp.path(), || {
-        git_vendor::exe::add(&repo, "coll", &url, Some("main"), &["**"], None, None, Default::default(), true)
+        git_vendor::exe::add(
+            &repo,
+            "coll",
+            &url,
+            Some("main"),
+            &["**"],
+            None,
+            None,
+            Default::default(),
+            true,
+        )
     });
     assert!(
         result.is_err(),
@@ -543,8 +556,7 @@ fn test_add_vendor_upstream_gitattributes_does_not_clobber_tracking() {
         .unwrap();
     });
 
-    let content =
-        std::fs::read_to_string(tmp.path().join("ext/.gitattributes")).unwrap();
+    let content = std::fs::read_to_string(tmp.path().join("ext/.gitattributes")).unwrap();
     assert!(
         content.contains("vendor=withattr"),
         "vendor tracking entries must survive; got:\n{content}"

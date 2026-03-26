@@ -153,9 +153,6 @@ pub(crate) fn common_dest_dir(mappings: &[PatternMapping]) -> String {
     first_parts[..common_len].join("/")
 }
 
-/// Build a [`globset::GlobSet`] from a slice of [`PatternMapping`]s, using
-/// only the glob side (left of `:`).
-
 /// Find the first [`PatternMapping`] from `mappings` whose glob matches
 /// `upstream_path`, and return the computed local path.
 ///
@@ -548,9 +545,12 @@ impl Vendor for Repository {
             match vendor.base.as_ref() {
                 Some(base) => {
                     let base = git2::Oid::from_str(base)?;
-                    let head = self.find_reference(&vendor_ref(&vendor.name))?.target().ok_or(
-                        git2::Error::from_str("head ref was not found; this is an internal error"),
-                    )?;
+                    let head = self
+                        .find_reference(&vendor_ref(&vendor.name))?
+                        .target()
+                        .ok_or(git2::Error::from_str(
+                            "head ref was not found; this is an internal error",
+                        ))?;
 
                     if base == head {
                         updates.insert(vendor, None);
@@ -559,9 +559,12 @@ impl Vendor for Repository {
                     }
                 }
                 None => {
-                    let head = self.find_reference(&vendor_ref(&vendor.name))?.target().ok_or(
-                        git2::Error::from_str("head ref was not found; this is an internal error"),
-                    )?;
+                    let head = self
+                        .find_reference(&vendor_ref(&vendor.name))?
+                        .target()
+                        .ok_or(git2::Error::from_str(
+                            "head ref was not found; this is an internal error",
+                        ))?;
                     updates.insert(vendor, Some(head));
                 }
             }
@@ -574,7 +577,9 @@ impl Vendor for Repository {
         let workdir = self
             .workdir()
             .ok_or_else(|| git2::Error::from_str("repository has no working directory"))?;
-        let tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
+        let tree = self
+            .find_reference(&vendor_ref(&vendor.name))?
+            .peel_to_tree()?;
         let vendor_attr = format!("vendor={}", vendor.name);
 
         let mappings = parse_patterns(&vendor.patterns);
@@ -628,7 +633,9 @@ impl Vendor for Repository {
 
         // Build the remapped upstream tree: each upstream file is placed at its
         // local (mapped) path according to the pattern mappings.
-        let upstream_tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
+        let upstream_tree = self
+            .find_reference(&vendor_ref(&vendor.name))?
+            .peel_to_tree()?;
         let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
         // Collect local paths so we can filter HEAD to only overlapping entries.
@@ -672,7 +679,9 @@ impl Vendor for Repository {
         let mappings = parse_patterns(&vendor.patterns);
 
         // UPSTREAM (theirs): remap the upstream tree to local paths via mappings.
-        let upstream_tree = self.find_reference(&vendor_ref(&vendor.name))?.peel_to_tree()?;
+        let upstream_tree = self
+            .find_reference(&vendor_ref(&vendor.name))?
+            .peel_to_tree()?;
         let theirs_remapped = remap_upstream_tree(self, &upstream_tree, &mappings)?;
 
         // LOCAL (ours): use gitattributes to determine which files are owned by
@@ -681,10 +690,7 @@ impl Vendor for Repository {
         let expected_vendor = vendor.name.clone();
         let ours = self.head()?.peel_to_tree()?;
         let ours_filtered = self.filter_by_predicate(&ours, |repo, path| {
-            match repo.get_attr(path, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX) {
-                Ok(Some(value)) if value == expected_vendor => true,
-                _ => false,
-            }
+            matches!(repo.get_attr(path, "vendor", git2::AttrCheckFlags::FILE_THEN_INDEX), Ok(Some(value)) if value == expected_vendor)
         })?;
 
         let mut opts = git2::MergeOptions::new();
