@@ -1,5 +1,7 @@
 //! Integration tests for the `Vendor` trait implementation on `git2::Repository`.
 
+mod common;
+
 use git_vendor::vendor_ref;
 use git_vendor::Vendor;
 use git2::{Repository, Signature};
@@ -127,7 +129,7 @@ impl TestRepo {
     /// Initialize a fresh non-bare repository with a pre-configured identity.
     fn new() -> Self {
         let dir = TempDir::new().unwrap();
-        let repo = Repository::init(dir.path()).unwrap();
+        let repo = common::init_test_repo(dir.path());
 
         {
             let mut cfg = repo.config().unwrap();

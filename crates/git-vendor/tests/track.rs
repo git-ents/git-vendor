@@ -1,3 +1,5 @@
+mod common;
+
 use git_vendor::{Vendor, VendorSource};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,7 +23,7 @@ fn init_repo_with_gitattributes(
     gitattributes_content: &str,
 ) -> (git2::Repository, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     std::fs::write(tmp.path().join(".gitattributes"), gitattributes_content).unwrap();
 
@@ -343,7 +345,7 @@ fn test_untrack_attrs_does_not_remove_other_vendors() {
 #[test]
 fn test_untrack_attrs_noop_when_gitattributes_absent() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     {
         std::fs::write(tmp.path().join("x.txt"), b"x").unwrap();

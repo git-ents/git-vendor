@@ -1,3 +1,5 @@
+mod common;
+
 use git_vendor::{Vendor, VendorSource};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,7 +23,7 @@ fn init_repo_with_gitattributes(
     gitattributes_content: &str,
 ) -> (git2::Repository, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     std::fs::write(tmp.path().join(".gitattributes"), gitattributes_content).unwrap();
 
@@ -112,7 +114,7 @@ fn make_upstream(files: &[(&str, &[u8])]) -> (git2::Repository, tempfile::TempDi
 #[test]
 fn test_refresh_vendor_attrs_uses_forward_slashes() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     std::fs::write(tmp.path().join(".gitattributes"), "").unwrap();
     std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
@@ -342,7 +344,7 @@ fn test_add_vendor_glob_filtering_with_mapping() {
 #[test]
 fn test_refresh_vendor_attrs_ordering_is_consistent() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let initial_attrs = "\
 .github/workflows/CD.yml vendor=myvendor
@@ -473,7 +475,7 @@ fn test_add_detects_overlapping_output_paths() {
 #[test]
 fn test_add_detects_collision_with_non_vendored_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     std::fs::write(tmp.path().join(".gitattributes"), "").unwrap();
     std::fs::write(tmp.path().join("lib.rs"), b"// existing\n").unwrap();

@@ -1,3 +1,5 @@
+mod common;
+
 use git_vendor::{History, VendorSource};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -95,7 +97,7 @@ fn setup_commit_mode_scenario(
     git2::Oid,
 ) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let old_base_oid = {
         let old_upstream_tree = build_tree(&repo, &[("a.txt", b"v1\n")]);
@@ -216,7 +218,7 @@ fn test_commit_mode_squash_creates_merge_commit() {
 #[test]
 fn test_commit_mode_replay_creates_one_commit_per_upstream() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "replay";
 
@@ -308,7 +310,7 @@ fn test_commit_mode_replay_creates_one_commit_per_upstream() {
 #[test]
 fn test_commit_mode_replay_preserves_non_vendor_files() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "repkeep";
 
@@ -396,7 +398,7 @@ fn test_commit_mode_replay_preserves_non_vendor_files() {
 #[test]
 fn test_commit_mode_replay_preserves_author_identity() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "repauth";
 
@@ -525,7 +527,7 @@ fn test_vendor_msg_format_contains_required_sections() {
 #[test]
 fn test_conflict_vendor_msg_contains_resolution_hint() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "confmsg";
 

@@ -1,3 +1,5 @@
+mod common;
+
 use git_vendor::{Vendor, VendorSource};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,7 +23,7 @@ fn _init_repo_with_gitattributes(
     gitattributes_content: &str,
 ) -> (git2::Repository, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     std::fs::write(tmp.path().join(".gitattributes"), gitattributes_content).unwrap();
 
@@ -130,7 +132,7 @@ fn setup_merge_scenario(
     patterns: &[&str],
 ) -> (git2::Repository, tempfile::TempDir, VendorSource) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let mut attrs = String::new();
     for &(local_path, _) in local_files {
@@ -223,7 +225,7 @@ fn test_merge_vendor_no_base_upstream_changed() {
 #[test]
 fn test_merge_vendor_with_base_clean_merge() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "clean";
 
@@ -285,7 +287,7 @@ fn test_merge_vendor_with_base_clean_merge() {
 #[test]
 fn test_merge_vendor_conflict() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "conflict";
 
@@ -394,7 +396,7 @@ fn test_merge_vendor_filters_unrelated_upstream_files() {
 #[test]
 fn test_merge_vendor_picks_up_new_upstream_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "newfile";
 
@@ -461,7 +463,7 @@ fn test_merge_vendor_picks_up_new_upstream_file() {
 #[test]
 fn test_merge_vendor_new_file_at_mapped_path() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     let vendor_name = "mapped";
 
@@ -570,7 +572,7 @@ fn test_update_stages_gitattributes_when_cwd_differs_from_workdir() {
     let vendor_name = "subdcwd";
 
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git2::Repository::init(tmp.path()).unwrap();
+    let repo = common::init_test_repo(tmp.path());
 
     // Upstream base.
     let old_tree = build_tree(&repo, &[("lib.rs", b"v1\n")]);
