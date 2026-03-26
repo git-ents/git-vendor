@@ -1,5 +1,66 @@
 # Changelog
 
+## [1.0.0-alpha.1](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.2.0...git-vendor-v1.0.0-alpha.1) (2026-03-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* combine list and check into a single status command
+* draft v1 specification
+* VendorStatus.upstream_oid replaced by VendorStatus.state (VendorState enum)
+
+### Features
+
+* Add --no-commit flag to merge and pull ([6bacd29](https://github.com/git-ents/git-vendor/commit/6bacd29d9a45c296b82f9e7d7c54caf69bd0d1a0))
+* Add `vendor status` command ([f912866](https://github.com/git-ents/git-vendor/commit/f91286631fd6586705f3ec87d6590c6b2d766d2a))
+* Add `VendorSource::base_ref()` ([a4a545c](https://github.com/git-ents/git-vendor/commit/a4a545cd7ca440b00343fad39eabe6421d7477f1))
+* Add `VendorSource::path` field and `vendor.<name>.path` config key ([5cb353c](https://github.com/git-ents/git-vendor/commit/5cb353c5bf758c0c7b3c412678b5b05ce28ac7c8))
+* Add CommitMode enum (squash/linear/replay) to VendorSource ([6bacd29](https://github.com/git-ents/git-vendor/commit/6bacd29d9a45c296b82f9e7d7c54caf69bd0d1a0))
+* Auto-commit on vendor add with configurable history mode ([68f4a5e](https://github.com/git-ents/git-vendor/commit/68f4a5e277d4f8eb2da38d546e2bdc765438a0c7))
+* Defer base write until after successful commit or staging ([5899c16](https://github.com/git-ents/git-vendor/commit/5899c16251601abf101ff65fc6e63407c930026e))
+* Enforce invariants from section 8 ([5899c16](https://github.com/git-ents/git-vendor/commit/5899c16251601abf101ff65fc6e63407c930026e))
+* Error on collision with existing non-vendored files on add ([5899c16](https://github.com/git-ents/git-vendor/commit/5899c16251601abf101ff65fc6e63407c930026e))
+* Error on overlapping output paths across vendors on add ([5899c16](https://github.com/git-ents/git-vendor/commit/5899c16251601abf101ff65fc6e63407c930026e))
+* Extend status output with force-push detection ([6bacd29](https://github.com/git-ents/git-vendor/commit/6bacd29d9a45c296b82f9e7d7c54caf69bd0d1a0))
+* Implement authorship modes for vendor merges ([60ac1f3](https://github.com/git-ents/git-vendor/commit/60ac1f37217c17ca00591c32a96b5a38e9658234))
+* Linear mode creates single-parent commit on HEAD ([60ac1f3](https://github.com/git-ents/git-vendor/commit/60ac1f37217c17ca00591c32a96b5a38e9658234))
+* Pub fn vendor_ref(name: &str) -&gt; String in lib.rs ([5ee296c](https://github.com/git-ents/git-vendor/commit/5ee296c5e673f6978688a1c67547aca91e5d4352))
+* Replay mode replays upstream commits with original author identity ([60ac1f3](https://github.com/git-ents/git-vendor/commit/60ac1f37217c17ca00591c32a96b5a38e9658234))
+* Squash mode creates synthetic second-parent + merge commit ([60ac1f3](https://github.com/git-ents/git-vendor/commit/60ac1f37217c17ca00591c32a96b5a38e9658234))
+* Tests/add_vendor.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/commit_mode.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/fetch.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/merge_vendor.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/rm.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/status.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/track_vendor_pattern.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* Tests/track.rs ([baa5e16](https://github.com/git-ents/git-vendor/commit/baa5e161849390ba86e8c170c503843bb3b5c329))
+* VENDOR_MSG conflict variant directs user to git commit -e -F .git/VENDOR_MSG ([60ac1f3](https://github.com/git-ents/git-vendor/commit/60ac1f37217c17ca00591c32a96b5a38e9658234))
+* VENDOR_MSG includes Updated N files, added/removed/modified counts ([60ac1f3](https://github.com/git-ents/git-vendor/commit/60ac1f37217c17ca00591c32a96b5a38e9658234))
+* Write .gitattributes to dest subdirectory when --path is used ([bac50e5](https://github.com/git-ents/git-vendor/commit/bac50e529a1b9537a8645ea431366a24daccf86a))
+* Write .gitattributes to destination subdirectory for --path vendors ([bac50e5](https://github.com/git-ents/git-vendor/commit/bac50e529a1b9537a8645ea431366a24daccf86a))
+
+
+### Bug Fixes
+
+* Check gitattributes path relative to workdir, not CWD ([0a4f674](https://github.com/git-ents/git-vendor/commit/0a4f67472fe9331be66a5c14fa481b434ecd00ec))
+* Don't introduce unattributed upstream files via merge_vendor ([dd8eb64](https://github.com/git-ents/git-vendor/commit/dd8eb6403e6e221c089ec1def536fbbedfcc9bf1))
+* Hard-error on non-vendored file collision in add ([7b8fc0e](https://github.com/git-ents/git-vendor/commit/7b8fc0e509792f66ea49c48965f6a2890668fdb3))
+* Merged_index filtered to attributed paths before checkout_and_stage ([dd8eb64](https://github.com/git-ents/git-vendor/commit/dd8eb6403e6e221c089ec1def536fbbedfcc9bf1))
+* Refresh_vendor_attrs uses theirs_tree instead of merged_index ([dd8eb64](https://github.com/git-ents/git-vendor/commit/dd8eb6403e6e221c089ec1def536fbbedfcc9bf1))
+* Remove unused imports and suppress dead code warning in tests ([8144ad3](https://github.com/git-ents/git-vendor/commit/8144ad37dd1e90d953a6586ed6f2150f8e21bce3))
+* Resolve clippy warnings ([0290a68](https://github.com/git-ents/git-vendor/commit/0290a68ba784102c783b221c80cd3809d61bf97b))
+* Stage refreshed .gitattributes before filtering merged index ([c2a6ec7](https://github.com/git-ents/git-vendor/commit/c2a6ec79a91409b407a5d2d667de3bc93d8fc484))
+* Track_patterns writes and stages attrs for new patterns ([7dc7e14](https://github.com/git-ents/git-vendor/commit/7dc7e146b52d6bbd5f9f1dc3eec6eca64b93fd74))
+* Use three-way merge in replay mode instead of bare tree replacement ([d47dba8](https://github.com/git-ents/git-vendor/commit/d47dba84da2c22bcb8716a975566491b1cab9970))
+* Write vendor attributes after checkout to avoid clobbering ([c440437](https://github.com/git-ents/git-vendor/commit/c4404370dd3c39b55c11e53d2e6743d03b9e5e95))
+
+
+### Code Refactoring
+
+* Combine list and check into a single status command ([f912866](https://github.com/git-ents/git-vendor/commit/f91286631fd6586705f3ec87d6590c6b2d766d2a))
+* Draft v1 specification ([9324022](https://github.com/git-ents/git-vendor/commit/932402235bbd7a9b680630da91dbf2f60a72a838))
+
 ## [0.2.0](https://github.com/git-ents/git-vendor/compare/git-vendor-v0.1.1...git-vendor-v0.2.0) (2026-03-11)
 
 
