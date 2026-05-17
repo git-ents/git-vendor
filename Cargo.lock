@@ -387,6 +387,7 @@ dependencies = [
  "gix",
  "globset",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

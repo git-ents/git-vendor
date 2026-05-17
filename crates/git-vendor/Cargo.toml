@@ -26,4 +26,5 @@ clap_mangen.workspace = true
 gix.workspace = true
 git-set-attr = { version = "0.1.2", path = "../git-set-attr" }
 tempfile.workspace = true
+thiserror.workspace = true
 globset.workspace = true

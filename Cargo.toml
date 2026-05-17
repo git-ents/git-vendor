@@ -21,3 +21,4 @@ clap_mangen = "0.2.31"
 gix = { version = "0.83", features = ["merge", "tree-editor"] }
 globset = "0.4.18"
 tempfile = "3"
+thiserror = "2"

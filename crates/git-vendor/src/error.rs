@@ -1,0 +1,30 @@
+/// Errors produced by [`crate::DepotRepository`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("i/o error")]
+    Io(#[from] std::io::Error),
+    #[error("no working directory")]
+    NoWorkdir,
+    #[error("invalid vendor config: {0}")]
+    Config(String),
+    #[error(transparent)]
+    Gix(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+macro_rules! impl_gix_from {
+    ($($ty:path),* $(,)?) => {
+        $(
+            impl From<$ty> for Error {
+                fn from(e: $ty) -> Self {
+                    Error::Gix(Box::new(e))
+                }
+            }
+        )*
+    };
+}
+
+impl_gix_from! {
+    gix::object::find::existing::Error,
+    gix::reference::edit::Error,
+    gix::reference::find::Error,
+}
