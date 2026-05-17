@@ -3,52 +3,66 @@
 mod error;
 mod vendor;
 
+pub mod exe;
+
 pub use error::Error;
-pub use vendor::{VendorConfig, VendorEntry, VendorRepository};
+pub use exe::VendorWorktree;
+pub use vendor::{
+    PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorRepository, VendorStatus,
+};
 
 impl VendorRepository for gix::Repository {
-    fn load_vendor_config(&self) -> Result<VendorConfig, Error> {
-        let path = self.workdir().ok_or(Error::NoWorkdir)?.join(".gitvendors");
-        let file = gix::config::File::from_path_no_includes(path, gix::config::Source::Local)
-            .map_err(|e| Error::Config(e.to_string()))?;
-        Ok(VendorConfig { file })
-    }
-
-    fn list_vendors(&self) -> Result<Vec<VendorEntry>, Error> {
-        let _tree = self.head()?.peel_to_commit()?.tree()?;
-
-        todo!()
-    }
-
-    fn get_vendor(&self, _name: &str) -> Result<Option<VendorEntry>, Error> {
-        todo!()
-    }
-
-    fn add_vendor(&self, _entry: &VendorEntry) -> Result<gix::index::State, Error> {
-        todo!()
-    }
-
-    fn remove_vendor(&self, _name: &str) -> Result<(), Error> {
-        todo!()
-    }
-
     fn fetch_vendor(&self, _entry: &VendorEntry) -> Result<gix::ObjectId, Error> {
         todo!()
     }
 
-    fn track_vendor_pattern(&self, _entry: &VendorEntry) -> Result<(), Error> {
+    fn vendor_tip(&self, _entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {
         todo!()
     }
 
-    fn refresh_vendor_attrs(&self, _entry: &VendorEntry) -> Result<(), Error> {
+    fn vendor_status(&self, _entry: &VendorEntry) -> Result<VendorStatus, Error> {
         todo!()
     }
 
-    fn merge_vendor(&self, _entry: &VendorEntry) -> Result<gix::index::State, Error> {
+    fn upstream_tree(
+        &self,
+        _entry: &VendorEntry,
+        _commit: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error> {
         todo!()
     }
 
-    fn vendor_attributes(&self, _entry: &VendorEntry) -> Result<Vec<String>, Error> {
+    fn base_tree(&self, _entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {
+        todo!()
+    }
+
+    fn vendor_tree(
+        &self,
+        _entry: &VendorEntry,
+        _ours: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error> {
+        todo!()
+    }
+
+    fn vendor_paths(&self, _entry: &VendorEntry) -> Result<Vec<String>, Error> {
+        todo!()
+    }
+
+    fn merge_vendor(
+        &self,
+        _entry: &VendorEntry,
+        _ours: gix::ObjectId,
+        _theirs: gix::ObjectId,
+    ) -> Result<VendorMerge, Error> {
+        todo!()
+    }
+
+    fn commit_vendor(
+        &self,
+        _entry: &VendorEntry,
+        _parent: gix::ObjectId,
+        _merge: &VendorMerge,
+    ) -> Result<gix::ObjectId, Error> {
         todo!()
     }
 }
