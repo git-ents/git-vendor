@@ -4,10 +4,19 @@ mod error;
 mod vendor;
 
 pub use error::Error;
-pub use vendor::{VendorEntry, VendorRepository};
+pub use vendor::{VendorConfig, VendorEntry, VendorRepository};
 
 impl VendorRepository for gix::Repository {
+    fn load_vendor_config(&self) -> Result<VendorConfig, Error> {
+        let path = self.workdir().ok_or(Error::NoWorkdir)?.join(".gitvendors");
+        let file = gix::config::File::from_path_no_includes(path, gix::config::Source::Local)
+            .map_err(|e| Error::Config(e.to_string()))?;
+        Ok(VendorConfig { file })
+    }
+
     fn list_vendors(&self) -> Result<Vec<VendorEntry>, Error> {
+        let _tree = self.head()?.peel_to_commit()?.tree()?;
+
         todo!()
     }
 

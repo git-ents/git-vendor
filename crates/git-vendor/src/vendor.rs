@@ -1,5 +1,11 @@
 use crate::Error;
 
+/// A handle to a loaded `.gitvendors` config file.
+#[allow(dead_code)]
+pub struct VendorConfig {
+    pub(crate) file: gix::config::File<'static>,
+}
+
 /// A vendored dependency entry loaded from configuration.
 pub struct VendorEntry {
     pub name: String,
@@ -10,6 +16,9 @@ pub struct VendorEntry {
 }
 
 pub trait VendorRepository {
+    /// Load the `.gitvendors` config file from the working directory.
+    fn load_vendor_config(&self) -> Result<VendorConfig, Error>;
+
     /// Return all vendor entries from `.gitvendors`.
     fn list_vendors(&self) -> Result<Vec<VendorEntry>, Error>;
 

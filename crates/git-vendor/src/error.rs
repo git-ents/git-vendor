@@ -24,7 +24,10 @@ macro_rules! impl_gix_from {
 }
 
 impl_gix_from! {
+    gix::object::commit::Error,
     gix::object::find::existing::Error,
+    gix::head::peel::to_commit::Error,
     gix::reference::edit::Error,
     gix::reference::find::Error,
+    gix::reference::find::existing::Error,
 }
