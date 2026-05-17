@@ -1,6 +1,6 @@
 //! Property-based tests for `VendorConfig` and `PatternMapping`.
 
-use git_vendor::{PatternMapping, VendorConfig, VendorEntry};
+use git_vendor::{PatternMapping, VendorConfig, VendorEntry, VendorName};
 use proptest::prelude::*;
 
 // ── Strategies ────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ fn entry_strategy() -> impl Strategy<Value = VendorEntry> {
         prop::collection::vec(pattern_strategy(), 0..=3),
     )
         .prop_map(|(name, url, ref_name, patterns)| VendorEntry {
-            name,
+            name: VendorName::new(name).expect("strategy yields valid names"),
             url,
             ref_name,
             base: None,

@@ -7,6 +7,8 @@ pub enum Error {
     NoWorkdir,
     #[error("invalid vendor config: {0}")]
     Config(String),
+    #[error("invalid vendor name: {0}")]
+    InvalidName(String),
     #[error(transparent)]
     Gix(Box<dyn std::error::Error + Send + Sync + 'static>),
 }

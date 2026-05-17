@@ -8,7 +8,8 @@ pub mod exe;
 pub use error::Error;
 pub use exe::VendorWorktree;
 pub use vendor::{
-    PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorRepository, VendorStatus,
+    PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorName, VendorRepository,
+    VendorStatus,
 };
 
 impl VendorRepository for gix::Repository {

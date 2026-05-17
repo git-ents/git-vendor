@@ -1,6 +1,6 @@
 //! Table-driven tests for `VendorConfig` and `PatternMapping`.
 
-use git_vendor::{PatternMapping, VendorConfig, VendorEntry};
+use git_vendor::{Error, PatternMapping, VendorConfig, VendorEntry, VendorName};
 use rstest::rstest;
 
 // ── PatternMapping ────────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ fn get_missing_returns_none() {
 
 fn make_entry(name: &str) -> VendorEntry {
     VendorEntry {
-        name: name.to_owned(),
+        name: VendorName::new(name).expect("valid name"),
         url: format!("https://example.com/{name}.git"),
         ref_name: Some("main".to_owned()),
         base: None,
@@ -219,6 +219,45 @@ fn display_round_trips_entries() {
     let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
     assert!(names.contains(&"lib-x"));
     assert!(names.contains(&"lib-y"));
+}
+
+// ── VendorName validation ─────────────────────────────────────────────────────
+
+#[rstest]
+#[case("lib-a")]
+#[case("a")]
+#[case("My_Lib.v2")]
+#[case("0abc")]
+fn vendor_name_accepts_safe_names(#[case] name: &str) {
+    let n = VendorName::new(name).expect("valid name");
+    assert_eq!(n, name);
+}
+
+#[rstest]
+#[case::empty("")]
+#[case::ref_escape("../../heads/main")]
+#[case::slash("foo/bar")]
+#[case::dotdot("a..b")]
+#[case::leading_dot(".hidden")]
+#[case::trailing_dot("trailing.")]
+#[case::lock_suffix("repo.lock")]
+#[case::space("has space")]
+#[case::newline("a\nb")]
+#[case::config_inject("x\"]\n[vendor \"y")]
+#[case::glob("a*")]
+#[case::non_ascii("café")]
+fn vendor_name_rejects_unsafe_names(#[case] name: &str) {
+    let err = VendorName::new(name).expect_err("must reject");
+    assert!(matches!(err, Error::InvalidName(_)), "got {err:?}");
+}
+
+#[test]
+fn entries_rejects_malicious_subsection_name() {
+    let cfg =
+        VendorConfig::parse("[vendor \"../../heads/main\"]\n\turl = https://example.com/x.git\n")
+            .expect("parse");
+    let err = cfg.entries().expect_err("must reject on read");
+    assert!(matches!(err, Error::InvalidName(_)), "got {err:?}");
 }
 
 // ── open ──────────────────────────────────────────────────────────────────────

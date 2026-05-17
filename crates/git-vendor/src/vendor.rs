@@ -63,11 +63,61 @@ impl PatternMapping {
     }
 }
 
+/// A validated vendor name.
+///
+/// The only way to obtain one is [`VendorName::new`], which rejects anything
+/// unsafe as a git ref component or git config subsection name. Holding a
+/// `VendorName` is therefore a proof that `refs/vendor/<name>` cannot escape
+/// its namespace and that `.gitvendors` cannot be corrupted by the name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VendorName(String);
+
+impl VendorName {
+    /// Validate and wrap a vendor name. The allowed set (`[A-Za-z0-9._-]`, no
+    /// leading/trailing `.`, no `..`, no `.lock` suffix) is a subset of valid
+    /// `git check-ref-format` path components and config subsection names.
+    pub fn new(name: impl Into<String>) -> Result<Self, Error> {
+        let name = name.into();
+        validate_name(&name)?;
+        Ok(Self(name))
+    }
+
+    /// The name as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for VendorName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for VendorName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for VendorName {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for VendorName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 /// A vendored dependency defined in `.gitvendors`.
 #[derive(Debug)]
 pub struct VendorEntry {
     /// Unique identifier for this vendor; maps to `[vendor "<name>"]` in config.
-    pub name: String,
+    pub name: VendorName,
     /// Remote URL of the upstream repository.
     pub url: String,
     /// Branch, tag, or SHA to track on the upstream remote (defaults to `HEAD`).
@@ -85,8 +135,10 @@ impl VendorEntry {
     }
 
     /// The local ref that holds the latest fetched upstream tip.
+    ///
+    /// Safe because [`VendorName`] is unconstructible without validation, so
+    /// `name` cannot escape the `refs/vendor/` namespace.
     pub fn vendor_ref(&self) -> String {
-        // BUG self.name MUST be sanitized.
         format!("refs/vendor/{}", self.name)
     }
 }
@@ -148,7 +200,7 @@ impl VendorConfig {
 
     /// Insert or replace a vendor entry.
     pub fn insert(&mut self, entry: &VendorEntry) -> Result<(), Error> {
-        let name_bstr = gix::bstr::BStr::new(entry.name.as_bytes());
+        let name_bstr = gix::bstr::BStr::new(entry.name.as_str().as_bytes());
 
         // Drain config content of all 'vendor.$name' instances.
         while self
@@ -158,7 +210,7 @@ impl VendorConfig {
         {}
 
         let subsection: std::borrow::Cow<'static, gix::bstr::BStr> =
-            std::borrow::Cow::Owned(gix::bstr::BString::from(entry.name.as_bytes()));
+            std::borrow::Cow::Owned(gix::bstr::BString::from(entry.name.as_str().as_bytes()));
         let mut section = self
             .file
             .new_section("vendor", Some(subsection))
@@ -195,6 +247,7 @@ fn entry_from_section(section: &gix::config::file::Section<'_>) -> Result<Vendor
         .ok_or_else(|| Error::Config("vendor section missing name".into()))?
         .to_str_lossy()
         .into_owned();
+    let name = VendorName::new(name)?;
 
     let body = section.body();
 
@@ -223,6 +276,39 @@ fn entry_from_section(section: &gix::config::file::Section<'_>) -> Result<Vendor
         base,
         patterns,
     })
+}
+
+/// Reject vendor names that are unsafe as a git ref component or a git config
+/// subsection name. The allowed set (`[A-Za-z0-9._-]`, no leading/trailing
+/// `.`, no `..`, no `.lock` suffix) is a subset of valid `git check-ref-format`
+/// path components and config subsection names, so a validated name cannot
+/// escape `refs/vendor/<name>` or corrupt `.gitvendors`.
+fn validate_name(name: &str) -> Result<(), Error> {
+    if name.is_empty() {
+        return Err(Error::InvalidName("name is empty".into()));
+    }
+    if !name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err(Error::InvalidName(format!(
+            "{name:?} contains characters outside [A-Za-z0-9._-]"
+        )));
+    }
+    if name.starts_with('.') || name.ends_with('.') {
+        return Err(Error::InvalidName(format!(
+            "{name:?} may not start or end with '.'"
+        )));
+    }
+    if name.contains("..") {
+        return Err(Error::InvalidName(format!("{name:?} may not contain '..'")));
+    }
+    if name.ends_with(".lock") {
+        return Err(Error::InvalidName(format!(
+            "{name:?} may not end with '.lock'"
+        )));
+    }
+    Ok(())
 }
 
 fn push_kv(section: &mut gix::config::file::SectionMut<'_, 'static>, key: &str, val: &str) {
