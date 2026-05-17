@@ -4,4 +4,4 @@ mod error;
 mod vendor;
 
 pub use error::Error;
-pub use vendor::{DepotRepository, VendorEntry};
+pub use vendor::{VendorEntry, VendorRepository};

@@ -9,7 +9,7 @@ pub struct VendorEntry {
     pub exclude: Option<Vec<String>>,
 }
 
-pub trait DepotRepository {
+pub trait VendorRepository {
     /// Return all vendor entries from `.gitvendors`.
     fn list_vendors(&self) -> Result<Vec<VendorEntry>, Error>;
 
