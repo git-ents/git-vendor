@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use gix::bstr::ByteSlice as _;
+
 use crate::Error;
 
 /// A glob pattern with an optional local destination prefix.
@@ -7,6 +9,7 @@ use crate::Error;
 /// Raw config syntax: `<glob>` or `<glob>:<destination>`.
 /// Example: `src/**:third_party/lib/` maps upstream `src/foo.rs` to
 /// `third_party/lib/foo.rs` in the local tree.
+#[derive(Debug)]
 pub struct PatternMapping {
     /// The glob string (left of the colon, or the whole value).
     pub glob: String,
@@ -16,30 +19,52 @@ pub struct PatternMapping {
 
 impl PatternMapping {
     /// Parse a raw pattern string, splitting on the first `:` only.
-    pub fn parse(_raw: &str) -> Self {
-        todo!()
+    pub fn parse(raw: &str) -> Self {
+        match raw.find(':') {
+            Some(i) => Self {
+                glob: raw[..i].to_owned(),
+                destination: Some(raw[i + 1..].to_owned()),
+            },
+            None => Self {
+                glob: raw.to_owned(),
+                destination: None,
+            },
+        }
     }
 
     /// Serialize back to the raw config string.
     pub fn to_raw(&self) -> String {
-        todo!()
+        match &self.destination {
+            Some(dest) => format!("{}:{}", self.glob, dest),
+            None => self.glob.clone(),
+        }
     }
 
     /// The literal (non-glob) leading prefix of the glob, e.g. `src/` from `src/**`.
     pub fn literal_prefix(&self) -> &str {
-        todo!()
+        let end = self
+            .glob
+            .find(['*', '?', '[', '{'])
+            .unwrap_or(self.glob.len());
+        &self.glob[..end]
     }
 
     /// Map an upstream path that matched this pattern to its local path.
     ///
     /// Strips [`Self::literal_prefix`], then prepends [`Self::destination`] if set.
     /// Returns `None` if `upstream_path` does not start with the literal prefix.
-    pub fn local_path(&self, _upstream_path: &str) -> Option<String> {
-        todo!()
+    pub fn local_path(&self, upstream_path: &str) -> Option<String> {
+        let prefix = self.literal_prefix();
+        let rest = upstream_path.strip_prefix(prefix)?;
+        Some(match &self.destination {
+            Some(dest) => format!("{dest}{rest}"),
+            None => rest.to_owned(),
+        })
     }
 }
 
 /// A vendored dependency defined in `.gitvendors`.
+#[derive(Debug)]
 pub struct VendorEntry {
     /// Unique identifier for this vendor; maps to `[vendor "<name>"]` in config.
     pub name: String,
@@ -67,50 +92,155 @@ impl VendorEntry {
 }
 
 /// Parsed `.gitvendors` configuration file (git config format).
+#[derive(Debug)]
 pub struct VendorConfig {
-    #[allow(dead_code)]
     pub(crate) file: gix::config::File<'static>,
 }
 
 impl VendorConfig {
     /// Parse configuration from a file on disk.
-    pub fn open(_path: &Path) -> Result<Self, Error> {
-        todo!()
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        let file = gix::config::File::from_path_no_includes(
+            path.to_path_buf(),
+            gix::config::Source::Local,
+        )
+        .map_err(|e| Error::Config(e.to_string()))?;
+        Ok(Self { file })
+    }
+
+    /// Parse configuration from a byte slice.
+    pub fn open_from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let s = std::str::from_utf8(bytes).map_err(|e| Error::Config(e.to_string()))?;
+        Self::parse(s)
     }
 
     /// Parse configuration from a string.
-    pub fn parse(_s: &str) -> Result<Self, Error> {
-        todo!()
+    pub fn parse(s: &str) -> Result<Self, Error> {
+        let file = s
+            .parse::<gix::config::File<'static>>()
+            .map_err(|e| Error::Config(e.to_string()))?;
+        Ok(Self { file })
     }
 
     /// Return all vendor entries.
     pub fn entries(&self) -> Result<Vec<VendorEntry>, Error> {
-        todo!()
+        let Some(sections) = self.file.sections_by_name("vendor") else {
+            return Ok(Vec::new());
+        };
+        sections.map(entry_from_section).collect()
     }
 
     /// Look up a vendor entry by name.
-    pub fn get(&self, _name: &str) -> Result<Option<VendorEntry>, Error> {
-        todo!()
+    pub fn get(&self, name: &str) -> Result<Option<VendorEntry>, Error> {
+        let Some(sections) = self.file.sections_by_name("vendor") else {
+            return Ok(None);
+        };
+        for section in sections {
+            let Some(sub) = section.header().subsection_name() else {
+                continue;
+            };
+            if sub == gix::bstr::BStr::new(name.as_bytes()) {
+                return Ok(Some(entry_from_section(section)?));
+            }
+        }
+        Ok(None)
     }
 
     /// Insert or replace a vendor entry.
-    pub fn insert(&mut self, _entry: &VendorEntry) -> Result<(), Error> {
-        todo!()
+    pub fn insert(&mut self, entry: &VendorEntry) -> Result<(), Error> {
+        let name_bstr = gix::bstr::BStr::new(entry.name.as_bytes());
+
+        // Drain config content of all 'vendor.$name' instances.
+        while self
+            .file
+            .remove_section("vendor", Some(name_bstr))
+            .is_some()
+        {}
+
+        let subsection: std::borrow::Cow<'static, gix::bstr::BStr> =
+            std::borrow::Cow::Owned(gix::bstr::BString::from(entry.name.as_bytes()));
+        let mut section = self
+            .file
+            .new_section("vendor", Some(subsection))
+            .map_err(|e| Error::Config(e.to_string()))?;
+
+        push_kv(&mut section, "url", &entry.url);
+        if let Some(r) = &entry.ref_name {
+            push_kv(&mut section, "ref", r);
+        }
+        if let Some(base) = &entry.base {
+            push_kv(&mut section, "base", &base.to_hex().to_string());
+        }
+        for pattern in &entry.patterns {
+            push_kv(&mut section, "pattern", &pattern.to_raw());
+        }
+
+        Ok(())
     }
 
     /// Remove a vendor entry by name. Returns `true` if it existed.
-    pub fn remove(&mut self, _name: &str) -> Result<bool, Error> {
-        todo!()
+    pub fn remove(&mut self, name: &str) -> Result<bool, Error> {
+        let name_bstr = gix::bstr::BStr::new(name.as_bytes());
+        Ok(self
+            .file
+            .remove_section("vendor", Some(name_bstr))
+            .is_some())
     }
 }
 
+fn entry_from_section(section: &gix::config::file::Section<'_>) -> Result<VendorEntry, Error> {
+    let name = section
+        .header()
+        .subsection_name()
+        .ok_or_else(|| Error::Config("vendor section missing name".into()))?
+        .to_str_lossy()
+        .into_owned();
+
+    let body = section.body();
+
+    let url = body
+        .value("url")
+        .ok_or_else(|| Error::Config(format!("vendor '{name}' missing url")))?
+        .to_str_lossy()
+        .into_owned();
+
+    let ref_name = body.value("ref").map(|v| v.to_str_lossy().into_owned());
+
+    let base = body
+        .value("base")
+        .and_then(|v| gix::ObjectId::from_hex(v.as_bytes()).ok());
+
+    let patterns = body
+        .values("pattern")
+        .iter()
+        .map(|v| PatternMapping::parse(&v.to_str_lossy()))
+        .collect();
+
+    Ok(VendorEntry {
+        name,
+        url,
+        ref_name,
+        base,
+        patterns,
+    })
+}
+
+fn push_kv(section: &mut gix::config::file::SectionMut<'_, 'static>, key: &str, val: &str) {
+    section.push(
+        gix::config::parse::section::ValueName::try_from(key.to_owned())
+            .expect("static key is valid"),
+        Some(gix::bstr::BStr::new(val.as_bytes())),
+    );
+}
+
 impl std::fmt::Display for VendorConfig {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.file)
     }
 }
 
 /// The relationship between a vendor's recorded base and the current upstream tip.
+#[derive(Debug)]
 pub enum VendorStatus {
     /// `refs/vendor/<name>` does not exist; the vendor has never been fetched.
     NotFetched,
@@ -126,6 +256,7 @@ pub enum VendorStatus {
 ///
 /// Self-contained: carries the upstream commit and ancestor so the result can be
 /// committed independently of how it was produced.
+#[derive(Debug)]
 pub struct VendorMerge {
     /// Upstream commit that was merged in; becomes the vendor's new `base`.
     pub upstream: gix::ObjectId,

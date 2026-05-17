@@ -28,3 +28,7 @@ git-set-attr = { version = "0.1.2", path = "../git-set-attr" }
 tempfile.workspace = true
 thiserror.workspace = true
 globset.workspace = true
+
+[dev-dependencies]
+proptest = "1.5.0"
+rstest = "0.23.0"
