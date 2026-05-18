@@ -124,12 +124,18 @@ impl VendorRepository for gix::Repository {
     ) -> Result<gix::ObjectId, Error> {
         let mut builder = globset::GlobSetBuilder::new();
         for pattern in &entry.patterns {
-            let glob = globset::Glob::new(&pattern.glob).map_err(|e| {
-                Error::Config(format!(
-                    "vendor '{}': invalid pattern '{}': {e}",
-                    entry.name, pattern.glob
-                ))
-            })?;
+            // `literal_separator(true)` gives gitignore-like semantics: `*`
+            // and `?` do not cross `/`, only `**` spans directories. Without
+            // it globset's default would let `src/*.rs` match `src/sub/b.rs`.
+            let glob = globset::GlobBuilder::new(&pattern.glob)
+                .literal_separator(true)
+                .build()
+                .map_err(|e| {
+                    Error::Config(format!(
+                        "vendor '{}': invalid pattern '{}': {e}",
+                        entry.name, pattern.glob
+                    ))
+                })?;
             builder.add(glob);
         }
         let set = builder
@@ -150,6 +156,24 @@ impl VendorRepository for gix::Repository {
             let Some(local_path) = entry.patterns[i].local_path(&upstream_path) else {
                 continue;
             };
+            // A metachar-free or exact-file glob has a literal prefix equal to
+            // the whole glob, so `local_path` strips it to `""` (and a
+            // `dir/`-style destination leaves a trailing empty component).
+            // Passing that to the tree editor yields gix's opaque
+            // `EmptyPathComponent`; surface it as an actionable config error
+            // instead, naming the file so the user can add a destination.
+            if local_path.is_empty()
+                || local_path.starts_with('/')
+                || local_path.ends_with('/')
+                || local_path.contains("//")
+            {
+                return Err(Error::Config(format!(
+                    "vendor '{}': pattern '{}' maps upstream '{upstream_path}' to the \
+                     invalid local path '{local_path}'; give the pattern a destination \
+                     with a file name, e.g. '{}:vendor/{upstream_path}'",
+                    entry.name, entry.patterns[i].glob, entry.patterns[i].glob,
+                )));
+            }
             editor.upsert(local_path, record.mode.kind(), record.oid)?;
         }
 
