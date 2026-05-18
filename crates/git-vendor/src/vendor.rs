@@ -345,14 +345,18 @@ pub enum VendorStatus {
 #[derive(Debug)]
 pub struct VendorMerge {
     /// Upstream commit that was merged in; becomes the vendor's new `base`.
-    pub upstream: gix::ObjectId,
+    ///
+    /// A commit, distinct from [`upstream_tree`](VendorRepository::upstream_tree).
+    pub upstream_commit: gix::ObjectId,
     /// Ancestor tree used for the three-way merge (`None` on the first add).
-    pub base: Option<gix::ObjectId>,
-    /// The merged result in local path space.
+    ///
+    /// A tree, distinct from [`VendorEntry::base`], which is a commit.
+    pub ancestor_tree: Option<gix::ObjectId>,
+    /// The merged result tree in local path space.
     ///
     /// Textual conflicts are written with conflict markers; binary conflicts keep
     /// the local ("ours") blob. The conflicting paths are listed in `conflicts`.
-    pub tree: gix::ObjectId,
+    pub result_tree: gix::ObjectId,
     /// Local paths with unresolved conflicts, empty on a clean merge.
     pub conflicts: Vec<String>,
 }
@@ -378,7 +382,7 @@ impl VendorMerge {
 /// Every tree-returning method works in *local path space*. The upstream side
 /// ([`upstream_tree`](Self::upstream_tree), [`base_tree`](Self::base_tree)) gets
 /// there via the entry's [`PatternMapping`]s; the local side
-/// ([`vendor_tree`](Self::vendor_tree)) via the `.gitattributes` content filter.
+/// ([`ours_tree`](Self::ours_tree)) via the `.gitattributes` content filter.
 pub trait VendorRepository {
     /// Fetch the upstream remote into `refs/vendor/<name>`, returning the tip OID.
     fn fetch_vendor(&self, entry: &VendorEntry) -> Result<gix::ObjectId, Error>;
@@ -400,6 +404,7 @@ pub trait VendorRepository {
 
     /// The filtered and remapped upstream tree at the recorded `base`.
     ///
+    /// Equivalent to [`upstream_tree`](Self::upstream_tree) at `entry.base`.
     /// Returns `None` before the first add, in which case the empty tree is the
     /// implied merge ancestor.
     fn base_tree(&self, entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error>;
@@ -409,14 +414,16 @@ pub trait VendorRepository {
     /// [`vendor_paths`](Self::vendor_paths).
     ///
     /// `ours` is supplied explicitly; defaulting it to `HEAD` is caller policy.
-    fn vendor_tree(&self, entry: &VendorEntry, ours: gix::ObjectId)
-    -> Result<gix::ObjectId, Error>;
+    fn ours_tree(&self, entry: &VendorEntry, ours: gix::ObjectId) -> Result<gix::ObjectId, Error>;
 
     /// The local paths carrying the `vendor=<name>` attribute — the local-side
     /// content filter, independent of the upstream pattern filter.
     ///
-    /// Resolved from `.gitattributes` in the tree/index, not the working copy.
-    fn vendor_paths(&self, entry: &VendorEntry) -> Result<Vec<String>, Error>;
+    /// Resolved from `.gitattributes` in the `ours` commit's tree (the same
+    /// tree [`ours_tree`](Self::ours_tree) draws content from), never the
+    /// working copy. `ours` is supplied explicitly; defaulting it to `HEAD` is
+    /// caller policy.
+    fn vendor_paths(&self, entry: &VendorEntry, ours: gix::ObjectId) -> Result<Vec<String>, Error>;
 
     /// Three-way merge the pattern-filtered upstream tree at `theirs`
     /// ("theirs") against the attribute-filtered tree of the `ours` commit
@@ -439,11 +446,11 @@ pub trait VendorRepository {
     ///
     /// The result is a two-parent merge commit: `parent` is the first parent
     /// (the local "ours" commit the result builds on, passed explicitly;
-    /// defaulting it to `HEAD` is caller policy), and `merge.upstream` is the
-    /// second parent — a real commit edge into the `refs/vendor/<name>` graph
-    /// recording the pristine upstream point that was integrated. Does not
-    /// move `HEAD` or any branch ref. The caller integrates the commit and
-    /// advances `entry.base` to `merge.upstream`, persisting the authoritative
+    /// defaulting it to `HEAD` is caller policy), and `merge.upstream_commit`
+    /// is the second parent — a real commit edge into the `refs/vendor/<name>`
+    /// graph recording the pristine upstream point that was integrated. Does
+    /// not move `HEAD` or any branch ref. The caller integrates the commit and
+    /// advances `entry.base` to `merge.upstream_commit`, persisting the authoritative
     /// pointer via [`VendorConfig::insert`].
     fn commit_vendor(
         &self,

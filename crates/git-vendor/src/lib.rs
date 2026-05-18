@@ -125,7 +125,7 @@ impl VendorRepository for gix::Repository {
         todo!()
     }
 
-    fn vendor_tree(
+    fn ours_tree(
         &self,
         _entry: &VendorEntry,
         _ours: gix::ObjectId,
@@ -133,7 +133,11 @@ impl VendorRepository for gix::Repository {
         todo!()
     }
 
-    fn vendor_paths(&self, _entry: &VendorEntry) -> Result<Vec<String>, Error> {
+    fn vendor_paths(
+        &self,
+        _entry: &VendorEntry,
+        _ours: gix::ObjectId,
+    ) -> Result<Vec<String>, Error> {
         todo!()
     }
 
