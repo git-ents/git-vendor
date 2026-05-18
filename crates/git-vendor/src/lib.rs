@@ -105,8 +105,11 @@ impl VendorRepository for gix::Repository {
         Ok(id)
     }
 
-    fn vendor_tip(&self, _entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {
-        todo!()
+    fn vendor_tip(&self, entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {
+        match self.try_find_reference(&entry.vendor_ref())? {
+            None => Ok(None),
+            Some(mut reference) => Ok(Some(reference.peel_to_id()?.detach())),
+        }
     }
 
     fn vendor_status(&self, _entry: &VendorEntry) -> Result<VendorStatus, Error> {
@@ -121,8 +124,11 @@ impl VendorRepository for gix::Repository {
         todo!()
     }
 
-    fn base_tree(&self, _entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {
-        todo!()
+    fn base_tree(&self, entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {
+        let Some(base) = entry.base else {
+            return Ok(None);
+        };
+        self.upstream_tree(entry, base).map(Some)
     }
 
     fn ours_tree(
