@@ -7,6 +7,7 @@ pub mod exe;
 
 pub use error::Error;
 pub use exe::VendorWorktree;
+use gix::bstr::ByteSlice as _;
 use gix::remote::fetch::{Status, refs::update::Mode};
 pub use vendor::{
     PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorName, VendorRepository,
@@ -118,10 +119,41 @@ impl VendorRepository for gix::Repository {
 
     fn upstream_tree(
         &self,
-        _entry: &VendorEntry,
-        _commit: gix::ObjectId,
+        entry: &VendorEntry,
+        commit: gix::ObjectId,
     ) -> Result<gix::ObjectId, Error> {
-        todo!()
+        let mut builder = globset::GlobSetBuilder::new();
+        for pattern in &entry.patterns {
+            let glob = globset::Glob::new(&pattern.glob).map_err(|e| {
+                Error::Config(format!(
+                    "vendor '{}': invalid pattern '{}': {e}",
+                    entry.name, pattern.glob
+                ))
+            })?;
+            builder.add(glob);
+        }
+        let set = builder
+            .build()
+            .map_err(|e| Error::Config(format!("vendor '{}': {e}", entry.name)))?;
+
+        let tree = self.find_commit(commit)?.tree()?;
+
+        let mut editor = self.empty_tree().edit()?;
+        for record in tree.traverse().breadthfirst.files()? {
+            if record.mode.is_tree() {
+                continue;
+            }
+            let upstream_path = record.filepath.to_str_lossy();
+            let Some(&i) = set.matches(upstream_path.as_ref()).first() else {
+                continue;
+            };
+            let Some(local_path) = entry.patterns[i].local_path(&upstream_path) else {
+                continue;
+            };
+            editor.upsert(local_path, record.mode.kind(), record.oid)?;
+        }
+
+        Ok(editor.write()?.detach())
     }
 
     fn base_tree(&self, entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error> {

@@ -32,6 +32,7 @@ macro_rules! impl_gix_from {
 impl_gix_from! {
     gix::object::commit::Error,
     gix::object::find::existing::Error,
+    gix::object::find::existing::with_conversion::Error,
     gix::reference::edit::Error,
     gix::reference::find::Error,
     gix::reference::find::existing::Error,
@@ -41,4 +42,8 @@ impl_gix_from! {
     gix::remote::fetch::prepare::Error,
     gix::remote::init::Error,
     gix::refspec::parse::Error,
+    gix::object::tree::editor::init::Error,
+    gix::object::tree::editor::write::Error,
+    gix::objs::tree::editor::Error,
+    gix::traverse::tree::breadthfirst::Error,
 }
