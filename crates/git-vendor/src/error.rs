@@ -9,6 +9,10 @@ pub enum Error {
     Config(String),
     #[error("invalid vendor name: {0}")]
     InvalidName(String),
+    #[error("invalid vendor url: {0}")]
+    InvalidUrl(String),
+    #[error("fetch failed: {0}")]
+    Fetch(String),
     #[error(transparent)]
     Gix(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
@@ -32,4 +36,10 @@ impl_gix_from! {
     gix::reference::edit::Error,
     gix::reference::find::Error,
     gix::reference::find::existing::Error,
+    gix::reference::peel::Error,
+    gix::remote::connect::Error,
+    gix::remote::fetch::Error,
+    gix::remote::fetch::prepare::Error,
+    gix::remote::init::Error,
+    gix::refspec::parse::Error,
 }
