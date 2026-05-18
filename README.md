@@ -8,9 +8,12 @@
 <!-- rumdl-enable MD013 -->
 
 > [!CAUTION]
-> This project is being actively developed!
-> Despite this, semantic versioning rules will be respected.
-> Expect frequent updates.
+> This project is being refactored to improve the API, and use [Gitoxide][gitoxide] for all repository operations.
+> The last [release] is fully featured: please try that (alpha) release if you want to try the project out.
+> When the refactor is finished, this warning will be removed.
+
+[gitoxide]: https://github.com/GitoxideLabs/gitoxide
+[release]: https://github.com/git-ents/git-vendor/releases/tag/git-vendor-v1.0.0-alpha.1
 
 ## About
 
