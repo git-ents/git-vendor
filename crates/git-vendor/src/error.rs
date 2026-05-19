@@ -46,4 +46,6 @@ impl_gix_from! {
     gix::object::tree::editor::write::Error,
     gix::objs::tree::editor::Error,
     gix::traverse::tree::breadthfirst::Error,
+    gix::repository::index_from_tree::Error,
+    gix::config::attribute_stack::Error,
 }

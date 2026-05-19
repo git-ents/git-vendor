@@ -224,12 +224,29 @@ impl VendorRepository for gix::Repository {
         self.upstream_tree(entry, base).map(Some)
     }
 
-    fn ours_tree(
-        &self,
-        _entry: &VendorEntry,
-        _ours: gix::ObjectId,
-    ) -> Result<gix::ObjectId, Error> {
-        todo!()
+    fn ours_tree(&self, entry: &VendorEntry, ours: gix::ObjectId) -> Result<gix::ObjectId, Error> {
+        let selected: std::collections::BTreeSet<gix::bstr::BString> =
+            resolve_vendor_paths(self, entry, ours)?
+                .into_iter()
+                .collect();
+
+        let tree = self.find_commit(ours)?.tree()?;
+        let mut editor = self.empty_tree().edit()?;
+        for record in tree.traverse().breadthfirst.files()? {
+            if record.mode.is_tree() {
+                continue;
+            }
+            // Select and write on the raw path bytes, never a lossy UTF-8
+            // round-trip: git tree paths are arbitrary bytes, and `to_str_lossy`
+            // would both rename non-UTF-8 paths in the result tree and collapse
+            // distinct paths onto one another in the selection set, mirroring
+            // the hazard `upstream_tree` documents.
+            let path = record.filepath.as_bstr();
+            if selected.contains(path) {
+                editor.upsert(path, record.mode.kind(), record.oid)?;
+            }
+        }
+        Ok(editor.write()?.detach())
     }
 
     fn vendor_paths(
@@ -257,4 +274,49 @@ impl VendorRepository for gix::Repository {
     ) -> Result<gix::ObjectId, Error> {
         todo!()
     }
+}
+
+/// The local paths in `ours`'s tree carrying the `vendor=<entry.name>`
+/// attribute — the local-side content filter that
+/// [`ours_tree`](VendorRepository::ours_tree) restricts to.
+///
+/// `.gitattributes` are resolved from the commit's tree through the object
+/// database (`Source::IdMapping`), never the working copy, so nested
+/// `.gitattributes` and last-match-wins precedence are honored exactly as git
+/// resolves them. Only an explicit `vendor=<name>` value selects a path: a
+/// bare `vendor`, `-vendor`, or a different value does not.
+fn resolve_vendor_paths(
+    repo: &gix::Repository,
+    entry: &VendorEntry,
+    ours: gix::ObjectId,
+) -> Result<Vec<gix::bstr::BString>, Error> {
+    let tree = repo.find_commit(ours)?.tree()?;
+    let tree_id = tree.id().detach();
+    let index = repo.index_from_tree(&tree_id)?;
+    let mut stack = repo.attributes_only(
+        &index,
+        gix::worktree::stack::state::attributes::Source::IdMapping,
+    )?;
+    let mut outcome = stack.selected_attribute_matches(["vendor"]);
+
+    let mut paths = Vec::new();
+    for record in tree.traverse().breadthfirst.files()? {
+        if record.mode.is_tree() {
+            continue;
+        }
+        let platform = stack.at_entry(record.filepath.as_bstr(), None)?;
+        outcome.reset();
+        platform.matching_attributes(&mut outcome);
+        let is_ours = outcome.iter_selected().any(|m| {
+            matches!(
+                m.assignment.state,
+                gix::attrs::StateRef::Value(v)
+                    if v.as_bstr() == entry.name.as_bytes().as_bstr()
+            )
+        });
+        if is_ours {
+            paths.push(record.filepath);
+        }
+    }
+    Ok(paths)
 }
