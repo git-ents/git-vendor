@@ -1,6 +1,7 @@
 //! Property-based tests for `VendorConfig` and `PatternMapping`.
 
 use git_vendor::{PatternMapping, VendorConfig, VendorEntry, VendorName};
+use gix::bstr::BStr;
 use proptest::prelude::*;
 
 // ── Strategies ────────────────────────────────────────────────────────────────
@@ -76,7 +77,7 @@ proptest! {
     #[test]
     fn local_path_some_when_prefix_matches(m in pattern_strategy(), suffix in "[a-z/]{0,8}") {
         let path = format!("{}{suffix}", m.literal_prefix());
-        prop_assert!(m.local_path(&path).is_some());
+        prop_assert!(m.local_path(BStr::new(&path)).is_some());
     }
 
     /// `local_path` starts with `destination` when it is set.
@@ -84,9 +85,12 @@ proptest! {
     fn local_path_has_destination_prefix(m in pattern_strategy(), suffix in "[a-z/]{0,8}") {
         let path = format!("{}{suffix}", m.literal_prefix());
         if let Some(dest) = &m.destination
-            && let Some(local) = m.local_path(&path)
+            && let Some(local) = m.local_path(BStr::new(&path))
         {
-            prop_assert!(local.starts_with(dest.as_str()), "local={local:?} dest={dest:?}");
+            prop_assert!(
+                local.starts_with(dest.as_bytes()),
+                "local={local:?} dest={dest:?}"
+            );
         }
     }
 
@@ -97,7 +101,7 @@ proptest! {
         if !prefix.is_empty() {
             // A path that definitely doesn't start with the prefix.
             let bad = format!("ZZZZZ/{}", prefix);
-            prop_assert!(m.local_path(&bad).is_none());
+            prop_assert!(m.local_path(BStr::new(&bad)).is_none());
         }
     }
 }

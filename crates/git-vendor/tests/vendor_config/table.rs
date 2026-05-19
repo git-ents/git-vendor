@@ -24,7 +24,8 @@ fn pattern_parse(#[case] raw: &str, #[case] glob: &str, #[case] dest: Option<&st
 #[case("a/b/c/**", "a/b/c/")]
 #[case("?file", "")]
 #[case("[abc]", "")]
-#[case("{a,b}", "")]
+// gix-glob has no brace expansion, so `{` is literal, not a metachar.
+#[case("{a,b}", "{a,b}")]
 fn literal_prefix(#[case] glob: &str, #[case] want: &str) {
     let m = PatternMapping {
         glob: glob.to_owned(),
@@ -55,7 +56,10 @@ fn local_path(
         glob: glob.to_owned(),
         destination: dest.map(str::to_owned),
     };
-    assert_eq!(m.local_path(upstream).as_deref(), want);
+    let got = m
+        .local_path(gix::bstr::BStr::new(upstream))
+        .map(|b| b.to_string());
+    assert_eq!(got.as_deref(), want);
 }
 
 // ── VendorConfig parse / entries ─────────────────────────────────────────────

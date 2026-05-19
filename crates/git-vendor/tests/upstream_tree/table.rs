@@ -32,6 +32,40 @@ fn git(args: &[&str], dir: &Path) {
     );
 }
 
+/// Run git feeding `stdin` and returning trimmed stdout bytes. Used to drive
+/// plumbing (`hash-object`, `mktree -z`, `commit-tree`) so a tree entry can
+/// carry a non-UTF-8 path without ever touching the host filesystem.
+fn git_out(args: &[&str], dir: &Path, stdin: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn git");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(stdin)
+        .expect("write stdin");
+    let out = child.wait_with_output().expect("git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {dir:?}:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let mut s = out.stdout;
+    while s.last() == Some(&b'\n') {
+        s.pop();
+    }
+    s
+}
+
 /// Initialize an upstream repo with a fixed multi-directory layout on `main`.
 fn make_upstream(dir: &Path) {
     git(&["init", "-b", "main"], dir);
@@ -291,6 +325,132 @@ fn single_file_with_named_destination_maps() {
 
     let tree = repo.upstream_tree(&entry, tip).expect("upstream_tree");
     assert_eq!(paths(&repo, tree), &["docs/README.md"]);
+}
+
+// ── Pattern compilation / index integrity ────────────────────────────────────
+
+/// Regression: a leading pattern whose glob `gix_glob` rejects (here, empty)
+/// is dropped from the compiled set. A later pattern must still be remapped
+/// through *its own* destination, not the dropped one's — i.e. the match
+/// index must not desync from the mapping it indexes.
+#[test]
+fn dropped_invalid_pattern_does_not_shift_remapping() {
+    let (_up, _local, repo, tip) = fixture();
+    let entry = entry(
+        "unused",
+        vec![
+            pat("", Some("WRONG/")),        // rejected by gix_glob → dropped
+            pat("src/**", Some("vendor/")), // must map through THIS destination
+        ],
+    );
+
+    let tree = repo.upstream_tree(&entry, tip).expect("upstream_tree");
+
+    assert_eq!(paths(&repo, tree), &["vendor/a.rs", "vendor/sub/b.rs"]);
+}
+
+/// A non-empty config whose globs all fail to compile is a configuration
+/// error, not a silent empty tree — an empty tree would, through merge,
+/// delete the vendor's content.
+#[test]
+fn all_invalid_patterns_is_config_error() {
+    let (_up, _local, repo, tip) = fixture();
+    let entry = entry("unused", vec![pat("", None), pat("   ", None)]);
+
+    match repo.upstream_tree(&entry, tip) {
+        Err(Error::Config(msg)) => {
+            assert!(msg.contains("mylib"), "should name the vendor: {msg}");
+            assert!(msg.contains("pattern"), "should explain the cause: {msg}");
+        }
+        other => panic!("expected Error::Config, got {other:?}"),
+    }
+}
+
+// ── Synthesized-path safety (verify_path equivalent) ──────────────────────────
+
+/// `destination` is untrusted config; a synthesized local path that escapes
+/// the tree — a `..` component, absolute, or a `.git` component (any case) —
+/// is rejected here, the boundary where it becomes a tree path.
+#[rstest]
+#[case::dotdot("src/**", Some("../escape/"))]
+#[case::absolute("src/**", Some("/abs/"))]
+#[case::dotgit("src/**", Some(".git/"))]
+#[case::dotgit_case("src/**", Some(".GIT/hooks/"))]
+#[case::interior_dotdot("src/**", Some("a/../../b/"))]
+fn escaping_local_path_is_config_error(#[case] glob: &str, #[case] destination: Option<&str>) {
+    let (_up, _local, repo, tip) = fixture();
+    let entry = entry("unused", vec![pat(glob, destination)]);
+
+    match repo.upstream_tree(&entry, tip) {
+        Err(Error::Config(_)) => {}
+        other => panic!("expected Error::Config for {destination:?}, got {other:?}"),
+    }
+}
+
+// ── Gitignore wildmatch semantics ─────────────────────────────────────────────
+
+/// `*`/`?` never cross `/` and there is no brace expansion, so a bare
+/// directory name matches only a file literally named that, never its
+/// contents. Vendoring a directory requires `dir/**`. Pinned so the
+/// documented behavior cannot regress to a silent empty result.
+#[rstest]
+#[case("src", &[])] // names a directory; no file is literally `src`
+#[case("src/**", &["a.rs", "sub/b.rs"])]
+fn bare_directory_name_requires_globstar(#[case] glob: &str, #[case] expected: &[&str]) {
+    let (_up, _local, repo, tip) = fixture();
+    let entry = entry("unused", vec![pat(glob, None)]);
+
+    let tree = repo.upstream_tree(&entry, tip).expect("upstream_tree");
+
+    assert_eq!(paths(&repo, tree), expected);
+}
+
+// ── Non-UTF-8 path fidelity ───────────────────────────────────────────────────
+
+/// Git tree paths are arbitrary bytes. Selection and remapping must operate
+/// on the raw bytes: a lossy UTF-8 round-trip would silently rename a
+/// non-UTF-8 file in the result tree (and could collide distinct files).
+#[test]
+fn non_utf8_upstream_path_is_preserved_byte_for_byte() {
+    let upstream = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let up = upstream.path();
+    git(&["init", "-b", "main"], up);
+    git(&["config", "user.email", "test@example.com"], up);
+    git(&["config", "user.name", "Test"], up);
+
+    let blob = String::from_utf8(git_out(&["hash-object", "-w", "--stdin"], up, b"x"))
+        .expect("blob oid is ascii");
+    // `mktree -z`: NUL-terminated records, so the path may hold any byte but
+    // NUL — here a lone 0xFF, which is not valid UTF-8.
+    let mut spec = format!("100644 blob {blob}\t").into_bytes();
+    spec.extend_from_slice(b"\xff.rs\0");
+    let tree = String::from_utf8(git_out(&["mktree", "-z"], up, &spec)).expect("tree oid is ascii");
+    let commit = String::from_utf8(git_out(&["commit-tree", &tree, "-m", "init"], up, b""))
+        .expect("commit oid is ascii");
+    git(&["update-ref", "refs/heads/main", &commit], up);
+
+    let repo = make_local(local.path());
+    let entry = entry(up.to_str().unwrap(), vec![pat("*.rs", Some("vendor/"))]);
+    let tip = repo.fetch_vendor(&entry).expect("fetch_vendor");
+
+    let tree = repo.upstream_tree(&entry, tip).expect("upstream_tree");
+    let result = repo.find_tree(tree).expect("find tree");
+    let names: Vec<Vec<u8>> = result
+        .traverse()
+        .breadthfirst
+        .files()
+        .expect("traverse")
+        .into_iter()
+        .filter(|r| !r.mode.is_tree())
+        .map(|r| r.filepath.to_vec())
+        .collect();
+
+    assert_eq!(
+        names,
+        vec![b"vendor/\xff.rs".to_vec()],
+        "non-UTF-8 path must survive selection + remap unchanged",
+    );
 }
 
 /// Remapping preserves the entry mode, not just the blob oid: an upstream

@@ -40,6 +40,14 @@ pub trait VendorWorktree {
 
 impl VendorWorktree for gix::Repository {
     fn checkout_vendor(&self, _entry: &VendorEntry, _tree: gix::ObjectId) -> Result<(), Error> {
+        // SAFETY
+        // This is the trust boundary where upstream content (carried verbatim
+        // through `upstream_tree`, including symlink and gitlink modes,
+        // mirroring git-subtree/submodule) reaches the working copy. Like
+        // core git's `verify_path`/checkout, projection MUST refuse to write
+        // through a symlinked leading path and reject `..`/absolute
+        // components — use gix-worktree's checked checkout, never naive
+        // `std::fs` writes. See the `upstream_tree` adversarial review (#5).
         todo!()
     }
 

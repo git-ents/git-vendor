@@ -14,6 +14,27 @@ pub use vendor::{
     VendorStatus,
 };
 
+/// Whether a synthesized local path is unsafe to write into the result tree.
+///
+/// Splits on `/` and validates every component with [`gix::validate::path::component`]
+/// — gix's analogue of git's `verify_path` — so empty components (leading or
+/// trailing `/`, `//`), `.`/`..`, and `.git` (including HFS/NTFS-obfuscated
+/// forms) are all rejected. Applied here, the boundary where untrusted
+/// `destination` config first becomes a tree path. Default `Options` keep
+/// every protection on so the result tree stays checkout-safe on any OS;
+/// `mode: None` because symlink-leaf handling is the checkout boundary's job
+/// ([`VendorWorktree`]).
+fn is_unsafe_local_path(path: &gix::bstr::BStr) -> bool {
+    path.split_str("/").any(|comp| {
+        gix::validate::path::component(
+            comp.into(),
+            None,
+            gix::validate::path::component::Options::default(),
+        )
+        .is_err()
+    })
+}
+
 impl VendorRepository for gix::Repository {
     /// Fetches `entry.tracking_ref()` from `entry.url` into `refs/vendor/<name>`
     /// and returns the *peeled* tip OID. When the tracked ref is an annotated
@@ -122,18 +143,27 @@ impl VendorRepository for gix::Repository {
         entry: &VendorEntry,
         commit: gix::ObjectId,
     ) -> Result<gix::ObjectId, Error> {
-        let patterns = entry
+        // Pair each compiled glob with the `PatternMapping` it came from.
+        // `gix_glob` rejects some globs (empty, blank, leading `#`); pairing
+        // instead of collecting a parallel `Vec<Pattern>` makes a match index
+        // structurally unable to desync from its remapping.
+        let patterns: Vec<(gix_glob::Pattern, &PatternMapping)> = entry
             .patterns
             .iter()
-            .map(|p| {
-                gix_glob::Pattern::from_bytes(p.glob.as_bytes()).ok_or_else(|| {
-                    Error::Config(format!(
-                        "vendor '{}': invalid pattern '{}'",
-                        entry.name, p.glob
-                    ))
-                })
-            })
-            .collect::<Result<Vec<gix_glob::Pattern>, _>>()?;
+            .filter_map(|p| gix_glob::Pattern::from_bytes(p.glob.as_bytes()).map(|pat| (pat, p)))
+            .collect();
+
+        // A non-empty config whose globs all fail to compile would otherwise
+        // silently yield the empty tree and, through merge, delete the
+        // vendor's content. Surface it instead.
+        if !entry.patterns.is_empty() && patterns.is_empty() {
+            return Err(Error::Config(format!(
+                "vendor '{}': none of its {} configured pattern(s) are valid \
+                 globs; check for empty or comment-only `pattern` values",
+                entry.name,
+                entry.patterns.len(),
+            )));
+        }
 
         let tree = self.find_commit(commit)?.tree()?;
 
@@ -142,12 +172,15 @@ impl VendorRepository for gix::Repository {
             if record.mode.is_tree() {
                 continue;
             }
-            let upstream_path = record.filepath.to_str_lossy();
-            let path_bstr: &gix::bstr::BStr = gix::bstr::BStr::new(upstream_path.as_bytes());
-            let basename_pos = upstream_path.rfind('/').map(|i| i + 1);
-            let Some(i) = patterns.iter().position(|pat| {
+            // Match and remap on the raw path bytes: git tree paths are
+            // arbitrary bytes, and a lossy UTF-8 round-trip would both
+            // misdirect glob matching and silently rename (or collide)
+            // non-UTF-8 files in the result tree.
+            let upstream_path = record.filepath.as_bstr();
+            let basename_pos = upstream_path.rfind_byte(b'/').map(|i| i + 1);
+            let Some((_, mapping)) = patterns.iter().find(|(pat, _)| {
                 pat.matches_repo_relative_path(
-                    path_bstr,
+                    upstream_path,
                     basename_pos,
                     Some(false),
                     gix_glob::pattern::Case::Sensitive,
@@ -156,28 +189,29 @@ impl VendorRepository for gix::Repository {
             }) else {
                 continue;
             };
-            let Some(local_path) = entry.patterns[i].local_path(&upstream_path) else {
+            let Some(local_path) = mapping.local_path(upstream_path) else {
                 continue;
             };
             // A metachar-free or exact-file glob has a literal prefix equal to
             // the whole glob, so `local_path` strips it to `""` (and a
             // `dir/`-style destination leaves a trailing empty component).
             // Passing that to the tree editor yields gix's opaque
-            // `EmptyPathComponent`; surface it as an actionable config error
-            // instead, naming the file so the user can add a destination.
-            if local_path.is_empty()
-                || local_path.starts_with('/')
-                || local_path.ends_with('/')
-                || local_path.contains("//")
-            {
+            // `EmptyPathComponent`. The same guard rejects synthesized paths
+            // that would escape the tree (`..`, absolute, or a `.git`
+            // component): `destination` is untrusted config and this is the
+            // boundary where it becomes a local path, mirroring git's own
+            // `verify_path`. Surface either as an actionable config error.
+            if is_unsafe_local_path(local_path.as_bstr()) {
                 return Err(Error::Config(format!(
-                    "vendor '{}': pattern '{}' maps upstream '{upstream_path}' to the \
-                     invalid local path '{local_path}'; give the pattern a destination \
-                     with a file name, e.g. '{}:vendor/{upstream_path}'",
-                    entry.name, entry.patterns[i].glob, entry.patterns[i].glob,
+                    "vendor '{name}': pattern '{glob}' maps upstream \
+                     '{upstream_path}' to the invalid local path \
+                     '{local_path}'; give the pattern a destination with a \
+                     file name, e.g. '{glob}:vendor/{upstream_path}'",
+                    name = entry.name,
+                    glob = mapping.glob,
                 )));
             }
-            editor.upsert(local_path, record.mode.kind(), record.oid)?;
+            editor.upsert(local_path.as_bstr(), record.mode.kind(), record.oid)?;
         }
 
         Ok(editor.write()?.detach())

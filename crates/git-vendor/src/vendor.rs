@@ -9,6 +9,11 @@ use crate::Error;
 /// Raw config syntax: `<glob>` or `<glob>:<destination>`.
 /// Example: `src/**:third_party/lib/` maps upstream `src/foo.rs` to
 /// `third_party/lib/foo.rs` in the local tree.
+///
+/// Globs use gitignore wildmatch semantics: `*` and `?` never cross `/`, and
+/// there is no brace expansion. A bare directory name matches only a file
+/// literally named that, never its contents — to vendor a directory, write
+/// `dir/**`.
 #[derive(Debug)]
 pub struct PatternMapping {
     /// The glob string (left of the colon, or the whole value).
@@ -40,26 +45,30 @@ impl PatternMapping {
         }
     }
 
-    /// The literal (non-glob) leading prefix of the glob, e.g. `src/` from `src/**`.
+    /// The literal (non-glob) leading prefix of the glob, e.g. `src/` from
+    /// `src/**`. gix-glob (gitignore wildmatch) has no brace expansion, so `{`
+    /// is a literal character, not a metachar boundary.
     pub fn literal_prefix(&self) -> &str {
-        let end = self
-            .glob
-            .find(['*', '?', '[', '{'])
-            .unwrap_or(self.glob.len());
+        let end = self.glob.find(['*', '?', '[']).unwrap_or(self.glob.len());
         &self.glob[..end]
     }
 
     /// Map an upstream path that matched this pattern to its local path.
     ///
-    /// Strips [`Self::literal_prefix`], then prepends [`Self::destination`] if set.
+    /// Strips [`Self::literal_prefix`], then prepends [`Self::destination`] if
+    /// set. Operates on raw bytes: upstream tree paths are arbitrary bytes, not
+    /// guaranteed UTF-8, and must survive selection and remapping byte-for-byte.
     /// Returns `None` if `upstream_path` does not start with the literal prefix.
-    pub fn local_path(&self, upstream_path: &str) -> Option<String> {
+    pub fn local_path(&self, upstream_path: &gix::bstr::BStr) -> Option<gix::bstr::BString> {
         let prefix = self.literal_prefix();
-        let rest = upstream_path.strip_prefix(prefix)?;
-        Some(match &self.destination {
-            Some(dest) => format!("{dest}{rest}"),
-            None => rest.to_owned(),
-        })
+        let rest = upstream_path.strip_prefix(prefix.as_bytes())?;
+        let mut out: Vec<u8> =
+            Vec::with_capacity(self.destination.as_ref().map_or(0, String::len) + rest.len());
+        if let Some(dest) = &self.destination {
+            out.extend_from_slice(dest.as_bytes());
+        }
+        out.extend_from_slice(rest);
+        Some(out.into())
     }
 }
 

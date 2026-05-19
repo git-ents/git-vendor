@@ -136,6 +136,38 @@ fn patterns_strategy() -> impl Strategy<Value = Vec<PatternMapping>> {
     )
 }
 
+/// `glob_strategy` plus globs `gix_glob` rejects, so a generated pattern set
+/// reliably mixes compilable and dropped entries.
+fn maybe_invalid_glob_strategy() -> impl Strategy<Value = String> {
+    prop_oneof![
+        glob_strategy(),
+        Just(String::new()),
+        Just("   ".to_owned()),
+        Just("# comment".to_owned()),
+    ]
+}
+
+/// Raw (glob, destination) pairs; `PatternMapping` is not `Clone`, so the two
+/// entries a test needs are each rebuilt from these strings.
+fn raw_patterns_strategy() -> impl Strategy<Value = Vec<(String, Option<String>)>> {
+    prop::collection::vec(
+        (maybe_invalid_glob_strategy(), destination_strategy()),
+        0..6,
+    )
+}
+
+fn build(name: VendorName, raw: &[(String, Option<String>)]) -> VendorEntry {
+    entry_with(
+        name,
+        raw.iter()
+            .map(|(glob, destination)| PatternMapping {
+                glob: glob.clone(),
+                destination: destination.clone(),
+            })
+            .collect(),
+    )
+}
+
 fn entry_with(name: VendorName, patterns: Vec<PatternMapping>) -> VendorEntry {
     VendorEntry {
         name,
@@ -250,6 +282,38 @@ proptest! {
         match repo.upstream_tree(&entry, f.tip) {
             Err(Error::Config(_)) => {}
             other => prop_assert!(false, "expected Error::Config, got {other:?}"),
+        }
+    }
+
+    /// Compiling drops globs `gix_glob` rejects, but a dropped pattern must
+    /// never shift which mapping a surviving pattern uses: `upstream_tree`
+    /// over the full entry equals `upstream_tree` over the entry with the
+    /// uncompilable patterns already removed. (When all patterns are dropped
+    /// the empty-config guard legitimately diverges, so require a survivor.)
+    #[test]
+    fn dropping_invalid_patterns_preserves_result(
+        name in name_strategy(),
+        raw in raw_patterns_strategy(),
+    ) {
+        let pruned: Vec<(String, Option<String>)> = raw
+            .iter()
+            .filter(|(g, _)| gix_glob::Pattern::from_bytes(g.as_bytes()).is_some())
+            .cloned()
+            .collect();
+        prop_assume!(!pruned.is_empty());
+
+        let f = fixture();
+        let repo = gix::open(&f.local).expect("gix open");
+        let full = build(name.clone(), &raw);
+        let pruned = build(name, &pruned);
+
+        match (
+            repo.upstream_tree(&full, f.tip),
+            repo.upstream_tree(&pruned, f.tip),
+        ) {
+            (Ok(a), Ok(b)) => prop_assert_eq!(a, b),
+            (Err(_), Err(_)) => {}
+            (a, b) => prop_assert!(false, "diverged: {a:?} vs {b:?}"),
         }
     }
 
