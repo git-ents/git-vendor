@@ -251,10 +251,10 @@ impl VendorRepository for gix::Repository {
 
     fn vendor_paths(
         &self,
-        _entry: &VendorEntry,
-        _ours: gix::ObjectId,
-    ) -> Result<Vec<String>, Error> {
-        todo!()
+        entry: &VendorEntry,
+        ours: gix::ObjectId,
+    ) -> Result<Vec<gix::bstr::BString>, Error> {
+        resolve_vendor_paths(self, entry, ours)
     }
 
     fn merge_vendor(

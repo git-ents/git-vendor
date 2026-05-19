@@ -432,7 +432,11 @@ pub trait VendorRepository {
     /// tree [`ours_tree`](Self::ours_tree) draws content from), never the
     /// working copy. `ours` is supplied explicitly; defaulting it to `HEAD` is
     /// caller policy.
-    fn vendor_paths(&self, entry: &VendorEntry, ours: gix::ObjectId) -> Result<Vec<String>, Error>;
+    fn vendor_paths(
+        &self,
+        entry: &VendorEntry,
+        ours: gix::ObjectId,
+    ) -> Result<Vec<gix::bstr::BString>, Error>;
 
     /// Three-way merge the pattern-filtered upstream tree at `theirs`
     /// ("theirs") against the attribute-filtered tree of the `ours` commit
