@@ -122,25 +122,18 @@ impl VendorRepository for gix::Repository {
         entry: &VendorEntry,
         commit: gix::ObjectId,
     ) -> Result<gix::ObjectId, Error> {
-        let mut builder = globset::GlobSetBuilder::new();
-        for pattern in &entry.patterns {
-            // `literal_separator(true)` gives gitignore-like semantics: `*`
-            // and `?` do not cross `/`, only `**` spans directories. Without
-            // it globset's default would let `src/*.rs` match `src/sub/b.rs`.
-            let glob = globset::GlobBuilder::new(&pattern.glob)
-                .literal_separator(true)
-                .build()
-                .map_err(|e| {
+        let patterns = entry
+            .patterns
+            .iter()
+            .map(|p| {
+                gix_glob::Pattern::from_bytes(p.glob.as_bytes()).ok_or_else(|| {
                     Error::Config(format!(
-                        "vendor '{}': invalid pattern '{}': {e}",
-                        entry.name, pattern.glob
+                        "vendor '{}': invalid pattern '{}'",
+                        entry.name, p.glob
                     ))
-                })?;
-            builder.add(glob);
-        }
-        let set = builder
-            .build()
-            .map_err(|e| Error::Config(format!("vendor '{}': {e}", entry.name)))?;
+                })
+            })
+            .collect::<Result<Vec<gix_glob::Pattern>, _>>()?;
 
         let tree = self.find_commit(commit)?.tree()?;
 
@@ -150,7 +143,17 @@ impl VendorRepository for gix::Repository {
                 continue;
             }
             let upstream_path = record.filepath.to_str_lossy();
-            let Some(&i) = set.matches(upstream_path.as_ref()).first() else {
+            let path_bstr: &gix::bstr::BStr = gix::bstr::BStr::new(upstream_path.as_bytes());
+            let basename_pos = upstream_path.rfind('/').map(|i| i + 1);
+            let Some(i) = patterns.iter().position(|pat| {
+                pat.matches_repo_relative_path(
+                    path_bstr,
+                    basename_pos,
+                    Some(false),
+                    gix_glob::pattern::Case::Sensitive,
+                    gix_glob::wildmatch::Mode::NO_MATCH_SLASH_LITERAL,
+                )
+            }) else {
                 continue;
             };
             let Some(local_path) = entry.patterns[i].local_path(&upstream_path) else {

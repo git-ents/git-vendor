@@ -243,17 +243,24 @@ fn base_tree_equals_upstream_tree_at_base() {
 
 // ── Error paths ───────────────────────────────────────────────────────────────
 
-/// A syntactically invalid glob is surfaced as `Error::Config`, naming the
-/// vendor, rather than panicking or silently dropping the pattern.
+/// An unclosed `[` is not a syntax error in Git's wildmatch: the pattern
+/// matches nothing. gix-glob is faithful to that — `from_bytes` accepts the
+/// pattern and match time produces no results rather than an error.
 #[test]
-fn invalid_glob_is_config_error() {
+fn unclosed_bracket_matches_nothing() {
     let (_up, _local, repo, tip) = fixture();
-    let entry = entry("unused", vec![pat("src/[", None)]);
+    let entry = entry("mylib", vec![pat("src/[", None)]);
 
-    match repo.upstream_tree(&entry, tip) {
-        Err(Error::Config(msg)) => assert!(msg.contains("mylib"), "got: {msg}"),
-        other => panic!("expected Error::Config, got {other:?}"),
-    }
+    let tree_oid = repo
+        .upstream_tree(&entry, tip)
+        .expect("unclosed bracket is not an error");
+    assert_eq!(
+        tree_oid,
+        repo.find_tree(gix::hash::ObjectId::empty_tree(repo.object_hash()))
+            .unwrap()
+            .id(),
+        "expected empty tree — pattern should match nothing"
+    );
 }
 
 /// A metachar-free glob (the common single-file vendor case, e.g. `LICENSE`)
