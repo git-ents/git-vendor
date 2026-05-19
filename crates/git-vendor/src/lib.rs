@@ -257,13 +257,69 @@ impl VendorRepository for gix::Repository {
         resolve_vendor_paths(self, entry, ours)
     }
 
+    /// `theirs` is an *upstream* commit; its pattern-filtered, remapped tree is
+    /// the "theirs" side. `ours` is a *local* commit; its attribute-filtered
+    /// tree is the "ours" side. The ancestor is [`base_tree`](Self::base_tree)
+    /// — the empty tree before the first merge, which turns this into an "add".
+    /// All three trees live in local path space, so reported conflict paths and
+    /// the result tree are local.
+    ///
+    /// gix's default blob policy gives exactly the documented resolution: a
+    /// textual conflict is written with conflict markers, and a binary conflict
+    /// keeps the "ours" (local) blob; both are still listed in `conflicts`. No
+    /// auto-resolution strategy is applied, so a real conflict is never
+    /// silently dropped from the result.
     fn merge_vendor(
         &self,
-        _entry: &VendorEntry,
-        _ours: gix::ObjectId,
-        _theirs: gix::ObjectId,
+        entry: &VendorEntry,
+        ours: gix::ObjectId,
+        theirs: gix::ObjectId,
     ) -> Result<VendorMerge, Error> {
-        todo!()
+        let our_tree = self.ours_tree(entry, ours)?;
+        let their_tree = self.upstream_tree(entry, theirs)?;
+        let ancestor_tree = self.base_tree(entry)?;
+        // `None` ancestor means no common history (first add): merge against
+        // the empty tree, but report `ancestor_tree: None` per the contract.
+        let ancestor =
+            ancestor_tree.unwrap_or_else(|| gix::ObjectId::empty_tree(self.object_hash()));
+
+        let labels = gix::merge::blob::builtin_driver::text::Labels {
+            ancestor: Some(b"base".as_bstr()),
+            current: Some(b"ours".as_bstr()),
+            other: Some(b"theirs".as_bstr()),
+        };
+        let options = self.tree_merge_options()?;
+        let mut outcome = self.merge_trees(ancestor, our_tree, their_tree, labels, options)?;
+
+        // Use git's own notion of "unresolved" (the default `TreatAsUnresolved`):
+        // a content merge that still carries markers, or an undecidable tree
+        // merge. No resolution strategy is configured, so every genuine
+        // conflict qualifies and none is silently dropped. Collect into a
+        // sorted set so the path list is deduplicated and deterministic — a
+        // single path can surface as more than one `Conflict`.
+        let how = gix::merge::tree::TreatAsUnresolved::git();
+        let conflict_paths: std::collections::BTreeSet<gix::bstr::BString> = outcome
+            .conflicts
+            .iter()
+            .filter(|c| c.is_unresolved(how))
+            .map(|c| {
+                let (ours_change, _) = c.changes_in_resolution();
+                ours_change.location().to_owned()
+            })
+            .collect();
+        let conflicts = conflict_paths
+            .into_iter()
+            .map(|p| p.to_str_lossy().into_owned())
+            .collect();
+
+        let result_tree = outcome.tree.write()?.detach();
+
+        Ok(VendorMerge {
+            upstream_commit: theirs,
+            ancestor_tree,
+            result_tree,
+            conflicts,
+        })
     }
 
     fn commit_vendor(

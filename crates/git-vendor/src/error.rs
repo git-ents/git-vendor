@@ -47,5 +47,7 @@ impl_gix_from! {
     gix::objs::tree::editor::Error,
     gix::traverse::tree::breadthfirst::Error,
     gix::repository::index_from_tree::Error,
+    gix::repository::merge_trees::Error,
+    gix::repository::tree_merge_options::Error,
     gix::config::attribute_stack::Error,
 }
