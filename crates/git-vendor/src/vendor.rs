@@ -402,7 +402,11 @@ pub trait VendorRepository {
     fn vendor_tip(&self, entry: &VendorEntry) -> Result<Option<gix::ObjectId>, Error>;
 
     /// Compare the vendor's recorded base against the current upstream tip.
-    fn vendor_status(&self, entry: &VendorEntry) -> Result<VendorStatus, Error>;
+    fn vendor_status(
+        &self,
+        entry: &VendorEntry,
+        commit: gix::ObjectId,
+    ) -> Result<VendorStatus, Error>;
 
     /// The filtered and remapped upstream tree at `commit`.
     fn upstream_tree(
