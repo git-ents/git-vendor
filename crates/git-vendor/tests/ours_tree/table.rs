@@ -391,6 +391,7 @@ fn nested_gitattributes_overrides_root() {
 /// Selection preserves a symlink entry as a symlink: the link path carries the
 /// attribute and is `upsert`ed with its link mode and the exact blob (the
 /// link's target bytes), not dereferenced or rewritten.
+#[cfg(unix)]
 #[test]
 fn selection_preserves_symlink() {
     let dir = tempfile::tempdir().unwrap();
