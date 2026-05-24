@@ -134,11 +134,7 @@ impl VendorRepository for gix::Repository {
         }
     }
 
-    fn vendor_status(
-        &self,
-        _entry: &VendorEntry,
-        _commit: gix::ObjectId,
-    ) -> Result<VendorStatus, Error> {
+    fn vendor_status(&self, _entry: &VendorEntry) -> Result<VendorStatus, Error> {
         todo!()
     }
 
