@@ -29,3 +29,15 @@ These are [borrowed from Git itself](https://git-scm.com/book/en/v2/Git-Internal
 |---|---|----|
 | [`git-vendor`](crates/git-vendor/) | An in-source vendoring alternative to submodules and subtrees. | Porcelain |
 | [`git-set-attr`](crates/git-set-attr/) | Set Git attributes programmatically. | Plumbing |
+
+## Alternatives
+
+This is not the first `git-vendor` project.
+In fact, despite being developed independently, this project was published *after* multiple other `git-vendor` projects.
+
+The [`thejoshwolfe/git-vendor`][thejoshwolfe] project appears to be near identical.
+Another project, [`brettlangdon/git-vendor`][brettlangdon], carries the same name but has slightly different goals; it additionally supports contributing changes upstream.
+Please check out each of those projects!
+
+[brettlangdon]: https://github.com/brettlangdon/git-vendor
+[thejoshwolfe]: https://github.com/thejoshwolfe/git-vendor
