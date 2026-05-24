@@ -177,6 +177,7 @@ fn hash_object(dir: &Path, kind: &str, content: &[u8]) -> String {
 
 /// Stage one entry into the index at a raw-byte `path` — `update-index
 /// --cacheinfo` takes an index path, not a filesystem path.
+#[cfg(unix)]
 fn cacheinfo(dir: &Path, mode: &str, oid: &str, path: &[u8]) {
     use std::os::unix::ffi::OsStrExt as _;
     let mut spec = format!("{mode},{oid},").into_bytes();
@@ -503,6 +504,7 @@ fn missing_object_ours_is_error() {
 /// A non-UTF-8 path carrying the attribute round-trips byte-for-byte: same
 /// path bytes, same blob oid, no `U+FFFD` substitution. This is the path
 /// `to_str_lossy` would silently rename in the result tree.
+#[cfg(unix)]
 #[test]
 fn non_utf8_path_preserved_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
@@ -544,6 +546,7 @@ fn non_utf8_path_preserved_byte_for_byte() {
 /// lossy implementation would (a) admit the unattributed sibling via the
 /// collapsed selection key and (b) collide them in the editor. Exactly the
 /// attributed path, by its real bytes, must survive — and only it.
+#[cfg(unix)]
 #[test]
 fn lossy_collision_does_not_misselect() {
     let dir = tempfile::tempdir().unwrap();
@@ -586,7 +589,15 @@ fn selection_preserves_gitlink() {
         .unwrap()
         .trim()
         .to_owned();
-    cacheinfo(p, "160000", &sub, b"sub");
+    git(
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{sub},sub"),
+        ],
+        p,
+    );
     let (repo, ours) = plumbing_commit(p);
 
     let tree = repo
