@@ -336,6 +336,7 @@ fn unicode_filename_round_trips() {
 #[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_filename_is_preserved() {
+    use gix::bstr::ByteSlice as _;
     use std::os::unix::ffi::OsStrExt as _;
 
     let dir = tempfile::tempdir().unwrap();

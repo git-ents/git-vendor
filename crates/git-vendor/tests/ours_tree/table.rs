@@ -122,6 +122,7 @@ fn paths(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<String> {
 
 /// Result paths as raw bytes — the only faithful view when a path is not
 /// UTF-8; `paths`/`tree_entries` would lossily mangle it.
+#[cfg(unix)]
 fn raw_paths(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<gix::bstr::BString> {
     let tree = repo.find_tree(tree).expect("find tree");
     tree.traverse()
