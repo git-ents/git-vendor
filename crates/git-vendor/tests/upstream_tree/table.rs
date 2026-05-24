@@ -465,13 +465,9 @@ fn remapping_preserves_executable_mode() {
     git(&["config", "user.email", "test@example.com"], up);
     git(&["config", "user.name", "Test"], up);
     std::fs::create_dir_all(up.join("src")).unwrap();
-    let script = up.join("src/run.sh");
-    std::fs::write(&script, b"#!/bin/sh\n").unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    std::fs::write(up.join("src/run.sh"), b"#!/bin/sh\n").unwrap();
     git(&["add", "."], up);
+    git(&["update-index", "--chmod=+x", "src/run.sh"], up);
     git(&["commit", "-m", "init"], up);
 
     let repo = make_local(local.path());

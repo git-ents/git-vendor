@@ -295,16 +295,12 @@ fn selection_preserves_executable_mode() {
     let p = dir.path();
     init(p);
     write(p, "tools/run.sh", b"#!/bin/sh\n");
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            p.join("tools/run.sh"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-    }
     write(p, ".gitattributes", b"tools/run.sh vendor=libfoo\n");
-    let (repo, ours) = commit(p);
+    git(&["add", "-A"], p);
+    git(&["update-index", "--chmod=+x", "tools/run.sh"], p);
+    git(&["commit", "-m", "init"], p);
+    let repo = gix::open(p).expect("gix open");
+    let ours = repo.head_commit().expect("head commit").id().detach();
 
     let tree = repo
         .ours_tree(&entry("libfoo", vec![]), ours)
