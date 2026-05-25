@@ -1,6 +1,6 @@
 //! Property-based tests for invariants relied upon by `fetch_vendor`.
 
-use git_vendor::{VendorEntry, VendorName};
+use git_vendor::{VendorEntry, VendorMode, VendorName};
 use proptest::prelude::*;
 
 // ── Strategies ────────────────────────────────────────────────────────────────
@@ -20,6 +20,7 @@ fn entry_strategy() -> impl Strategy<Value = VendorEntry> {
         ref_name,
         base: None,
         patterns: vec![],
+        mode: VendorMode::Merge,
     })
 }
 

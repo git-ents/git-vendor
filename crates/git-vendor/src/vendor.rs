@@ -122,6 +122,45 @@ impl PartialEq<&str> for VendorName {
     }
 }
 
+/// How upstream history is recorded when integrating a vendor.
+///
+/// Config key `mode` in `.gitvendors`; defaults to [`Merge`](VendorMode::Merge).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VendorMode {
+    /// Record the integrated upstream commit directly as the merge's second
+    /// parent, so the upstream's full history is reachable from `HEAD`.
+    #[default]
+    Merge,
+    /// Record a fresh, parentless commit holding only the remapped vendor tree
+    /// as the second parent, severing upstream reachability so a plain clone
+    /// stays thin.
+    Squash,
+}
+
+impl VendorMode {
+    /// The config-file spelling of this mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VendorMode::Merge => "merge",
+            VendorMode::Squash => "squash",
+        }
+    }
+}
+
+impl std::str::FromStr for VendorMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "merge" => Ok(VendorMode::Merge),
+            "squash" => Ok(VendorMode::Squash),
+            other => Err(Error::Config(format!(
+                "invalid vendor mode {other:?}; expected 'merge' or 'squash'"
+            ))),
+        }
+    }
+}
+
 /// A vendored dependency defined in `.gitvendors`.
 #[derive(Debug)]
 pub struct VendorEntry {
@@ -135,6 +174,15 @@ pub struct VendorEntry {
     pub base: Option<gix::ObjectId>,
     /// Patterns selecting which upstream files to vendor, with optional remapping.
     pub patterns: Vec<PatternMapping>,
+    /// How upstream history is recorded on integration.
+    ///
+    /// [`Merge`](VendorMode::Merge) (default) records the integrated upstream
+    /// commit directly as the merge's second parent, so the upstream's full
+    /// history is reachable from `HEAD`. [`Squash`](VendorMode::Squash) records
+    /// a fresh, parentless commit holding only the remapped vendor tree,
+    /// severing that reachability so a plain clone stays thin. `base` keeps the
+    /// same meaning in both modes.
+    pub mode: VendorMode,
 }
 
 impl VendorEntry {
@@ -232,6 +280,9 @@ impl VendorConfig {
         if let Some(base) = &entry.base {
             push_kv(&mut section, "base", &base.to_hex().to_string());
         }
+        if entry.mode != VendorMode::default() {
+            push_kv(&mut section, "mode", entry.mode.as_str());
+        }
         for pattern in &entry.patterns {
             push_kv(&mut section, "pattern", &pattern.to_raw());
         }
@@ -272,6 +323,11 @@ fn entry_from_section(section: &gix::config::file::Section<'_>) -> Result<Vendor
         .value("base")
         .and_then(|v| gix::ObjectId::from_hex(v.as_bytes()).ok());
 
+    let mode = match body.value("mode") {
+        None => VendorMode::default(),
+        Some(v) => v.to_str_lossy().trim().parse()?,
+    };
+
     let patterns = body
         .values("pattern")
         .iter()
@@ -284,6 +340,7 @@ fn entry_from_section(section: &gix::config::file::Section<'_>) -> Result<Vendor
         ref_name,
         base,
         patterns,
+        mode,
     })
 }
 
@@ -459,12 +516,28 @@ pub trait VendorRepository {
     ///
     /// The result is a two-parent merge commit: `parent` is the first parent
     /// (the local "ours" commit the result builds on, passed explicitly;
-    /// defaulting it to `HEAD` is caller policy), and `merge.upstream_commit`
-    /// is the second parent — a real commit edge into the `refs/vendor/<name>`
-    /// graph recording the pristine upstream point that was integrated. Does
-    /// not move `HEAD` or any branch ref. The caller integrates the commit and
-    /// advances `entry.base` to `merge.upstream_commit`, persisting the authoritative
-    /// pointer via [`VendorConfig::insert`].
+    /// defaulting it to `HEAD` is caller policy). The second parent records the
+    /// integrated upstream point:
+    ///
+    /// - [`Merge`](VendorMode::Merge) (default): `merge.upstream_commit`
+    ///   itself — a real commit edge into the `refs/vendor/<name>` graph, making
+    ///   the upstream's full history reachable from `HEAD`.
+    /// - [`Squash`](VendorMode::Squash): a fresh, parentless commit holding only
+    ///   the remapped vendor tree, severing that reachability so a plain clone
+    ///   stays thin. The integrated upstream OID is recorded in its message so
+    ///   the squashed-from point survives a clone lacking upstream history.
+    ///
+    /// Either way, does not move `HEAD` or any branch ref, and the caller
+    /// integrates the commit and advances `entry.base` to
+    /// `merge.upstream_commit` — unchanged by the mode — persisting the
+    /// authoritative pointer via [`VendorConfig::insert`].
+    ///
+    /// Note that in [`Squash`](VendorMode::Squash) mode `entry.base` names a
+    /// commit that is *not* reachable from local history (the synthetic second
+    /// parent severs the upstream graph). In a thin clone that lacks the
+    /// upstream objects, [`base_tree`](Self::base_tree) and
+    /// [`vendor_status`](Self::vendor_status) therefore require a
+    /// [`fetch_vendor`](Self::fetch_vendor) first to repopulate them.
     fn commit_vendor<'a, 'c>(
         &self,
         committer: impl Into<gix::actor::SignatureRef<'c>>,

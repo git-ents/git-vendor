@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use git_vendor::{PatternMapping, VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -57,6 +57,7 @@ fn entry_without_base(url: &str) -> VendorEntry {
             glob: "src/**".to_owned(),
             destination: Some("third_party/".to_owned()),
         }],
+        mode: VendorMode::Merge,
     }
 }
 

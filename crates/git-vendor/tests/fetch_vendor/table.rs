@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use git_vendor::{Error, PatternMapping, VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{
+    Error, PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _,
+};
 use rstest::rstest;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -63,6 +65,7 @@ fn make_entry(url: &str, ref_name: Option<&str>, patterns: Vec<PatternMapping>) 
         ref_name: ref_name.map(str::to_owned),
         base: None,
         patterns,
+        mode: VendorMode::Merge,
     }
 }
 

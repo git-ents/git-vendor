@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use git_vendor::{PatternMapping, VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use gix::bstr::ByteSlice as _;
 use proptest::prelude::*;
 
@@ -71,6 +71,7 @@ fn entry(url: &str) -> VendorEntry {
             glob: "up/**".to_owned(),
             destination: Some("vendor/".to_owned()),
         }],
+        mode: VendorMode::Merge,
     }
 }
 

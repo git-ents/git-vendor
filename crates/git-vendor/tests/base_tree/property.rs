@@ -8,7 +8,7 @@
 //! name is fuzzed, matching the `vendor_tip` properties. The recorded-base
 //! path will get its own property once `upstream_tree` lands.
 
-use git_vendor::{VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use proptest::prelude::*;
 
 fn name_strategy() -> impl Strategy<Value = VendorName> {
@@ -28,6 +28,7 @@ proptest! {
             ref_name: None,
             base: None,
             patterns: vec![],
+            mode: VendorMode::Merge,
         };
         let dir = tempfile::tempdir().unwrap();
         let repo = gix::init_bare(dir.path()).expect("init bare");

@@ -11,7 +11,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use git_vendor::{Error, PatternMapping, VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{
+    Error, PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _,
+};
 use gix::bstr::ByteSlice as _;
 use proptest::prelude::*;
 
@@ -63,6 +65,7 @@ fn fixture() -> &'static Fixture {
             ref_name: None,
             base: None,
             patterns: vec![],
+            mode: VendorMode::Merge,
         };
         let tip = repo.fetch_vendor(&probe).expect("fetch_vendor");
 
@@ -175,6 +178,7 @@ fn entry_with(name: VendorName, patterns: Vec<PatternMapping>) -> VendorEntry {
         ref_name: None,
         base: None,
         patterns,
+        mode: VendorMode::Merge,
     }
 }
 

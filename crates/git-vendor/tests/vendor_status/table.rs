@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use git_vendor::{VendorEntry, VendorName, VendorRepository as _, VendorStatus};
+use git_vendor::{VendorEntry, VendorMode, VendorName, VendorRepository as _, VendorStatus};
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -74,6 +74,7 @@ fn make_entry(name: &str, url: &str, base: Option<gix::ObjectId>) -> VendorEntry
         ref_name: Some("main".to_owned()),
         base,
         patterns: vec![],
+        mode: VendorMode::Merge,
     }
 }
 

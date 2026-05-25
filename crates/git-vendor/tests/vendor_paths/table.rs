@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use git_vendor::{PatternMapping, VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use gix::bstr::BString;
 use rstest::rstest;
 
@@ -85,6 +85,7 @@ fn entry(name: &str, patterns: Vec<PatternMapping>) -> VendorEntry {
         ref_name: None,
         base: None,
         patterns,
+        mode: VendorMode::Merge,
     }
 }
 

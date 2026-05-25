@@ -1,6 +1,6 @@
 //! Table-driven tests for `VendorConfig` and `PatternMapping`.
 
-use git_vendor::{Error, PatternMapping, VendorConfig, VendorEntry, VendorName};
+use git_vendor::{Error, PatternMapping, VendorConfig, VendorEntry, VendorMode, VendorName};
 use rstest::rstest;
 
 // ── PatternMapping ────────────────────────────────────────────────────────────
@@ -164,6 +164,7 @@ fn make_entry(name: &str) -> VendorEntry {
             glob: "src/**".to_owned(),
             destination: Some("third_party/".to_owned()),
         }],
+        mode: VendorMode::Merge,
     }
 }
 
@@ -179,6 +180,60 @@ fn insert_then_get_round_trips() {
     assert_eq!(got.ref_name, entry.ref_name);
     assert_eq!(got.patterns.len(), 1);
     assert_eq!(got.patterns[0].to_raw(), "src/**:third_party/");
+}
+
+#[test]
+fn mode_squash_round_trips() {
+    let mut cfg = VendorConfig::parse("").expect("parse");
+    let mut entry = make_entry("mylib");
+    entry.mode = VendorMode::Squash;
+    cfg.insert(&entry).expect("insert");
+
+    let serialized = cfg.to_string();
+    assert!(serialized.contains("mode = squash"), "{serialized}");
+    let got = VendorConfig::parse(&serialized)
+        .expect("re-parse")
+        .get("mylib")
+        .expect("get")
+        .expect("present");
+    assert_eq!(got.mode, VendorMode::Squash);
+}
+
+#[test]
+fn mode_defaults_to_merge_when_absent() {
+    let e = VendorConfig::parse(simple_config())
+        .expect("parse")
+        .get("lib-a")
+        .expect("get")
+        .expect("present");
+    assert_eq!(e.mode, VendorMode::Merge);
+}
+
+#[test]
+fn mode_merge_is_not_serialized() {
+    let mut cfg = VendorConfig::parse("").expect("parse");
+    cfg.insert(&make_entry("mylib")).expect("insert");
+    assert!(!cfg.to_string().contains("mode ="), "{cfg}");
+}
+
+#[rstest]
+#[case("merge", VendorMode::Merge)]
+#[case("squash", VendorMode::Squash)]
+fn mode_parses_known_values(#[case] value: &str, #[case] want: VendorMode) {
+    let cfg = VendorConfig::parse(&format!(
+        "[vendor \"x\"]\n\turl = https://example.com/x.git\n\tmode = {value}\n"
+    ))
+    .expect("parse");
+    assert_eq!(cfg.get("x").expect("get").expect("present").mode, want);
+}
+
+#[test]
+fn mode_rejects_unknown_value() {
+    let cfg =
+        VendorConfig::parse("[vendor \"x\"]\n\turl = https://example.com/x.git\n\tmode = rebase\n")
+            .expect("parse");
+    let err = cfg.get("x").expect_err("must reject unknown mode");
+    assert!(matches!(err, Error::Config(_)), "got {err:?}");
 }
 
 #[test]

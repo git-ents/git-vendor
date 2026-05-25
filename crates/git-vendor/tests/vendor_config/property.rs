@@ -1,6 +1,6 @@
 //! Property-based tests for `VendorConfig` and `PatternMapping`.
 
-use git_vendor::{PatternMapping, VendorConfig, VendorEntry, VendorName};
+use git_vendor::{PatternMapping, VendorConfig, VendorEntry, VendorMode, VendorName};
 use gix::bstr::BStr;
 use proptest::prelude::*;
 
@@ -34,19 +34,25 @@ fn pattern_strategy() -> impl Strategy<Value = PatternMapping> {
         .prop_map(|(glob, destination)| PatternMapping { glob, destination })
 }
 
+fn mode_strategy() -> impl Strategy<Value = VendorMode> {
+    prop_oneof![Just(VendorMode::Merge), Just(VendorMode::Squash)]
+}
+
 fn entry_strategy() -> impl Strategy<Value = VendorEntry> {
     (
         name_strategy(),
         url_strategy(),
         prop::option::of("[a-z]{2,8}".prop_map(|s| s)),
         prop::collection::vec(pattern_strategy(), 0..=3),
+        mode_strategy(),
     )
-        .prop_map(|(name, url, ref_name, patterns)| VendorEntry {
+        .prop_map(|(name, url, ref_name, patterns, mode)| VendorEntry {
             name: VendorName::new(name).expect("strategy yields valid names"),
             url,
             ref_name,
             base: None,
             patterns,
+            mode,
         })
 }
 
@@ -121,6 +127,7 @@ proptest! {
         prop_assert_eq!(got.url, entry.url);
         prop_assert_eq!(got.ref_name, entry.ref_name);
         prop_assert_eq!(got.patterns.len(), entry.patterns.len());
+        prop_assert_eq!(got.mode, entry.mode);
     }
 
     /// `insert` then `remove` leaves the config empty (for a single entry).
@@ -168,6 +175,7 @@ proptest! {
             prop_assert!(found.is_some(), "entry '{}' missing after round-trip", orig.name);
             let found = found.unwrap();
             prop_assert_eq!(&found.url, &orig.url);
+            prop_assert_eq!(found.mode, orig.mode);
         }
     }
 }

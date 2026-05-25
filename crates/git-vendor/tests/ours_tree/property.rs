@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use git_vendor::{PatternMapping, VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use gix::bstr::ByteSlice as _;
 use proptest::prelude::*;
 
@@ -169,6 +169,7 @@ fn entry_with(name: &str, patterns: Vec<PatternMapping>) -> VendorEntry {
         ref_name: None,
         base: None,
         patterns,
+        mode: VendorMode::Merge,
     }
 }
 

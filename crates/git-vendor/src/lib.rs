@@ -10,8 +10,8 @@ pub use exe::VendorWorktree;
 use gix::bstr::ByteSlice as _;
 use gix::remote::fetch::{Status, refs::update::Mode};
 pub use vendor::{
-    PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorName, VendorRepository,
-    VendorStatus,
+    PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorMode, VendorName,
+    VendorRepository, VendorStatus,
 };
 
 /// Whether a synthesized local path is unsafe to write into the result tree.
@@ -353,17 +353,53 @@ impl VendorRepository for gix::Repository {
         committer: impl Into<gix::actor::SignatureRef<'c>>,
         author: impl Into<gix::actor::SignatureRef<'a>>,
         message: impl AsRef<str>,
-        _entry: &VendorEntry,
+        entry: &VendorEntry,
         parent: gix::ObjectId,
         merge: &VendorMerge,
     ) -> Result<gix::ObjectId, Error> {
+        let committer: gix::actor::SignatureRef<'c> = committer.into();
+        let author: gix::actor::SignatureRef<'a> = author.into();
+
+        // The second parent records the integrated upstream point. By default
+        // it is `merge.upstream_commit` itself — a real edge into the
+        // `refs/vendor/<name>` graph, so the upstream's full history is
+        // reachable from `HEAD`. In squash mode it is instead a fresh,
+        // parentless commit holding only the remapped vendor tree, severing
+        // that reachability so a plain clone stays thin; the integrated
+        // upstream OID is recorded in its message so the squashed-from point
+        // survives a clone lacking the upstream history.
+        let second_parent = if entry.mode == VendorMode::Squash {
+            let squash = gix::objs::Commit {
+                tree: self.upstream_tree(entry, merge.upstream_commit)?,
+                parents: Default::default(),
+                // Shares the merge commit's author/committer identity and
+                // timestamp: the two objects record a single operation.
+                author: author.into(),
+                committer: committer.into(),
+                encoding: None,
+                // The squashed-from upstream OID is recorded as a git trailer so
+                // it survives a thin clone (which lacks the upstream graph) and
+                // stays machine-readable, while riding in the message — which
+                // every tool preserves — rather than a fragile extra header.
+                message: format!(
+                    "squash: vendor '{}'\n\nSquashed-upstream: {}\n",
+                    entry.name, merge.upstream_commit
+                )
+                .into(),
+                extra_headers: Vec::new(),
+            };
+            self.write_object(&squash)?.detach()
+        } else {
+            merge.upstream_commit
+        };
+
         let commit = gix::objs::Commit {
             tree: merge.result_tree,
-            // First parent is the local "ours" commit; second is the upstream
-            // commit, a real edge into the `refs/vendor/<name>` graph.
-            parents: [parent, merge.upstream_commit].into_iter().collect(),
-            author: author.into().into(),
-            committer: committer.into().into(),
+            // First parent is the local "ours" commit; second records the
+            // integrated upstream point (see `second_parent` above).
+            parents: [parent, second_parent].into_iter().collect(),
+            author: author.into(),
+            committer: committer.into(),
             encoding: None,
             message: message.as_ref().into(),
             extra_headers: Vec::new(),

@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use git_vendor::{VendorEntry, VendorName, VendorRepository as _};
+use git_vendor::{VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use proptest::prelude::*;
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -51,6 +51,7 @@ fn entry(name: VendorName) -> VendorEntry {
         ref_name: None,
         base: None,
         patterns: vec![],
+        mode: VendorMode::Merge,
     }
 }
 
