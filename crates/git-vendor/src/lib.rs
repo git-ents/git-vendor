@@ -6,12 +6,11 @@ mod vendor;
 pub mod exe;
 
 pub use error::Error;
-pub use exe::VendorWorktree;
 use gix::bstr::ByteSlice as _;
 use gix::remote::fetch::{Status, refs::update::Mode};
 pub use vendor::{
     ConflictStages, PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorMode, VendorName,
-    VendorRepository, VendorStatus,
+    VendorRepository, VendorStatus, VendorWorktree,
 };
 
 /// Whether a synthesized local path is unsafe to write into the result tree.
