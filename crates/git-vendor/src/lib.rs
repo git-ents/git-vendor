@@ -57,8 +57,15 @@ impl VendorRepository for gix::Repository {
             gix::url::Scheme::Https
             | gix::url::Scheme::Http
             | gix::url::Scheme::Ssh
-            | gix::url::Scheme::Git
-            | gix::url::Scheme::File => {}
+            | gix::url::Scheme::Git => {}
+            gix::url::Scheme::File => {
+                if !self.is_bare() {
+                    return Err(Error::InvalidUrl(format!(
+                        "{}: refusing transport `{:?}`; local transports are not yet supported",
+                        entry.url, url.scheme
+                    )));
+                }
+            }
             ref other => {
                 return Err(Error::InvalidUrl(format!(
                     "{}: refusing transport `{other:?}`; plug-in transports are not supported",

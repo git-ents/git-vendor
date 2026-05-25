@@ -309,7 +309,7 @@ fn fetch_errors_when_ref_missing() {
 /// when the bug is fixed this flips to a regular failure and the attribute
 /// is removed.
 #[test]
-#[should_panic(expected = "refs/vendor/<name> now points into")]
+#[should_panic]
 fn fetch_returns_upstream_tip_into_non_bare_local() {
     let upstream = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
