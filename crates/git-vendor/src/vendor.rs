@@ -465,8 +465,11 @@ pub trait VendorRepository {
     /// not move `HEAD` or any branch ref. The caller integrates the commit and
     /// advances `entry.base` to `merge.upstream_commit`, persisting the authoritative
     /// pointer via [`VendorConfig::insert`].
-    fn commit_vendor(
+    fn commit_vendor<'a, 'c>(
         &self,
+        committer: impl Into<gix::actor::SignatureRef<'c>>,
+        author: impl Into<gix::actor::SignatureRef<'a>>,
+        message: impl AsRef<str>,
         entry: &VendorEntry,
         parent: gix::ObjectId,
         merge: &VendorMerge,

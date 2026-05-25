@@ -348,8 +348,11 @@ impl VendorRepository for gix::Repository {
         })
     }
 
-    fn commit_vendor(
+    fn commit_vendor<'a, 'c>(
         &self,
+        _committer: impl Into<gix::actor::SignatureRef<'c>>,
+        _author: impl Into<gix::actor::SignatureRef<'a>>,
+        _message: impl AsRef<str>,
         _entry: &VendorEntry,
         _parent: gix::ObjectId,
         _merge: &VendorMerge,
