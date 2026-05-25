@@ -350,14 +350,25 @@ impl VendorRepository for gix::Repository {
 
     fn commit_vendor<'a, 'c>(
         &self,
-        _committer: impl Into<gix::actor::SignatureRef<'c>>,
-        _author: impl Into<gix::actor::SignatureRef<'a>>,
-        _message: impl AsRef<str>,
+        committer: impl Into<gix::actor::SignatureRef<'c>>,
+        author: impl Into<gix::actor::SignatureRef<'a>>,
+        message: impl AsRef<str>,
         _entry: &VendorEntry,
-        _parent: gix::ObjectId,
-        _merge: &VendorMerge,
+        parent: gix::ObjectId,
+        merge: &VendorMerge,
     ) -> Result<gix::ObjectId, Error> {
-        todo!()
+        let commit = gix::objs::Commit {
+            tree: merge.result_tree,
+            // First parent is the local "ours" commit; second is the upstream
+            // commit, a real edge into the `refs/vendor/<name>` graph.
+            parents: [parent, merge.upstream_commit].into_iter().collect(),
+            author: author.into().into(),
+            committer: committer.into().into(),
+            encoding: None,
+            message: message.as_ref().into(),
+            extra_headers: Vec::new(),
+        };
+        Ok(self.write_object(&commit)?.detach())
     }
 }
 

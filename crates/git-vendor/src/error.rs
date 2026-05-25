@@ -33,6 +33,7 @@ impl_gix_from! {
     gix::object::commit::Error,
     gix::object::find::existing::Error,
     gix::object::find::existing::with_conversion::Error,
+    gix::object::write::Error,
     gix::reference::edit::Error,
     gix::reference::find::Error,
     gix::reference::find::existing::Error,
