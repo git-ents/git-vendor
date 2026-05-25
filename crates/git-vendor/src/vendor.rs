@@ -514,6 +514,12 @@ pub trait VendorRepository {
     /// Mint the merge commit recording `merge` on top of the `parent` local
     /// commit, returning the new local commit.
     ///
+    /// Returns [`Error::Conflict`] if `merge` has unresolved conflicts (see
+    /// [`VendorMerge::has_conflicts`]): a conflicted merge carries markers in
+    /// `result_tree`, which must be resolved in the working tree — via
+    /// [`VendorWorktree::checkout_vendor_conflicted`](crate::VendorWorktree::checkout_vendor_conflicted)
+    /// — and committed through ordinary git, never minted directly here.
+    ///
     /// The result is a two-parent merge commit: `parent` is the first parent
     /// (the local "ours" commit the result builds on, passed explicitly;
     /// defaulting it to `HEAD` is caller policy). The second parent records the

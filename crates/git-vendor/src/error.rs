@@ -13,6 +13,8 @@ pub enum Error {
     InvalidUrl(String),
     #[error("fetch failed: {0}")]
     Fetch(String),
+    #[error("merge conflict: {0}")]
+    Conflict(String),
     #[error(transparent)]
     Gix(Box<dyn std::error::Error + Send + Sync + 'static>),
 }

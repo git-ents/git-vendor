@@ -357,6 +357,16 @@ impl VendorRepository for gix::Repository {
         parent: gix::ObjectId,
         merge: &VendorMerge,
     ) -> Result<gix::ObjectId, Error> {
+        if merge.has_conflicts() {
+            return Err(Error::Conflict(format!(
+                "vendor '{}' has {} unresolved conflict(s): {}; resolve them in \
+                 the working tree before committing",
+                entry.name,
+                merge.conflicts.len(),
+                merge.conflicts.join(", "),
+            )));
+        }
+
         let committer: gix::actor::SignatureRef<'c> = committer.into();
         let author: gix::actor::SignatureRef<'a> = author.into();
 

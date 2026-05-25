@@ -6,7 +6,7 @@
 //! of the one working copy and its ambient `HEAD`/index state, kept distinct
 //! from the pure object-database operations.
 
-use crate::{Error, VendorEntry};
+use crate::{Error, VendorEntry, VendorMerge};
 
 /// Projection of vendor state onto the working copy.
 ///
@@ -20,6 +20,30 @@ pub trait VendorWorktree {
     /// Only paths owned by this vendor are written; unrelated files are left
     /// untouched.
     fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error>;
+
+    /// Project a conflicted merge onto the working copy for manual resolution.
+    ///
+    /// Writes `merge.result_tree` — which carries conflict markers in the
+    /// textual blobs and the "ours" blob for binary conflicts — to the vendor's
+    /// paths, and records each path in `merge.conflicts` as unmerged in the
+    /// index, leaving the same state a stalled `git merge` does: `git status`
+    /// shows the conflicts and `git add` resolves them.
+    ///
+    /// Use this instead of
+    /// [`commit_vendor`](crate::VendorRepository::commit_vendor), which refuses a
+    /// conflicted [`VendorMerge`] with [`Error::Conflict`]: the conflicted state
+    /// is resolved in the working tree and committed through ordinary git, never
+    /// minted directly with markers baked in.
+    ///
+    /// Note: faithful stage 1/2/3 index entries need the base/ours/theirs blob
+    /// per conflicted path; [`VendorMerge`] carries only `result_tree` and the
+    /// path list today, so this likely requires threading the per-side versions
+    /// through the merge.
+    fn checkout_vendor_conflicted(
+        &self,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
+    ) -> Result<(), Error>;
 
     /// Add the given paths to the vendor's local content filter by writing
     /// `vendor=<name>` entries into the working-copy `.gitattributes`.
@@ -48,6 +72,14 @@ impl VendorWorktree for gix::Repository {
         // through a symlinked leading path and reject `..`/absolute
         // components — use gix-worktree's checked checkout, never naive
         // `std::fs` writes. See the `upstream_tree` adversarial review (#5).
+        todo!()
+    }
+
+    fn checkout_vendor_conflicted(
+        &self,
+        _entry: &VendorEntry,
+        _merge: &VendorMerge,
+    ) -> Result<(), Error> {
         todo!()
     }
 
