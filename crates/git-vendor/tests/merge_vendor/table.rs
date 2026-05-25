@@ -23,7 +23,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use git_vendor::{
-    Error, PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _,
+    ConflictStages, Error, PatternMapping, VendorEntry, VendorMerge, VendorMode, VendorName,
+    VendorRepository as _,
 };
 use gix::bstr::ByteSlice as _;
 use rstest::rstest;
@@ -149,16 +150,41 @@ fn paths(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<String> {
     tree_entries(repo, tree).into_keys().collect()
 }
 
+fn conflict_paths(merge: &VendorMerge) -> Vec<&str> {
+    merge.conflicts.iter().map(|c| c.path.as_str()).collect()
+}
+
 fn blob(repo: &gix::Repository, oid: gix::ObjectId) -> Vec<u8> {
     repo.find_object(oid).expect("find blob").data.clone()
 }
 
 fn blob_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> Vec<u8> {
-    let oid = tree_entries(repo, tree)
+    blob(repo, oid_at(repo, tree, path))
+}
+
+fn oid_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> gix::ObjectId {
+    tree_entries(repo, tree)
         .get(path)
         .copied()
-        .unwrap_or_else(|| panic!("path {path:?} absent from result tree"));
-    blob(repo, oid)
+        .unwrap_or_else(|| panic!("path {path:?} absent from tree"))
+}
+
+/// The three stage blob oids of a conflict, `[base, ours, theirs]`, dropping
+/// the mode so the wiring can be checked against known blob ids.
+fn stage_oids(c: &ConflictStages) -> [Option<gix::ObjectId>; 3] {
+    [
+        c.stages[0].map(|(_, oid)| oid),
+        c.stages[1].map(|(_, oid)| oid),
+        c.stages[2].map(|(_, oid)| oid),
+    ]
+}
+
+fn conflict<'a>(merge: &'a VendorMerge, path: &str) -> &'a ConflictStages {
+    merge
+        .conflicts
+        .iter()
+        .find(|c| c.path == path)
+        .unwrap_or_else(|| panic!("no conflict at {path:?}: {:?}", merge.conflicts))
 }
 
 struct Built {
@@ -278,7 +304,7 @@ fn first_add_paths_and_conflicts(
         .expect("merge_vendor");
 
     assert_eq!(paths(&b.repo, merge.result_tree), expected_paths);
-    assert_eq!(merge.conflicts, expected_conflicts);
+    assert_eq!(conflict_paths(&merge), expected_conflicts);
     // The contract: a first add has no recorded base, so the ancestor is
     // absent and the upstream commit is exactly `theirs`.
     assert_eq!(merge.ancestor_tree, None);
@@ -342,7 +368,7 @@ fn text_conflict_writes_markers_with_labels() {
         .merge_vendor(&b.entry, b.ours, b.theirs)
         .expect("merge_vendor");
 
-    assert_eq!(merge.conflicts, &["vendor/f.txt"]);
+    assert_eq!(conflict_paths(&merge), &["vendor/f.txt"]);
     let body = blob_at(&b.repo, merge.result_tree, "vendor/f.txt");
     let text = body.as_bstr().to_string();
     assert!(text.contains("<<<<<<< ours"), "no ours marker in {text:?}");
@@ -378,12 +404,47 @@ fn binary_conflict_keeps_ours_blob_verbatim() {
         .merge_vendor(&b.entry, b.ours, b.theirs)
         .expect("merge_vendor");
 
-    assert_eq!(merge.conflicts, &["vendor/b.bin"]);
+    assert_eq!(conflict_paths(&merge), &["vendor/b.bin"]);
     assert_eq!(
         blob_at(&b.repo, merge.result_tree, "vendor/b.bin"),
         ours_bytes,
         "binary conflict must keep the local blob byte-for-byte",
     );
+}
+
+/// An add/add conflict records the stage triple a stalled `git merge` would:
+/// stage 1 ("base") is absent (a first add has no common ancestor), stage 2
+/// ("ours") is the local blob, and stage 3 ("theirs") is the upstream blob —
+/// each drawn from its own filtered tree and landed in the right slot, as
+/// regular-file blobs.
+#[test]
+fn add_add_conflict_records_ours_and_theirs_stages() {
+    let b = build(
+        &[("vendor/f.txt", b"local-line\n")],
+        "vendor/* vendor=mylib\n",
+        &[("up/f.txt", b"upstream-line\n")],
+        vec![pat("up/**", Some("vendor/"))],
+    );
+
+    let merge = b
+        .repo
+        .merge_vendor(&b.entry, b.ours, b.theirs)
+        .expect("merge_vendor");
+
+    let ours_tree = b.repo.ours_tree(&b.entry, b.ours).expect("ours_tree");
+    let their_tree = b
+        .repo
+        .upstream_tree(&b.entry, b.theirs)
+        .expect("upstream_tree");
+    let ours_oid = oid_at(&b.repo, ours_tree, "vendor/f.txt");
+    let their_oid = oid_at(&b.repo, their_tree, "vendor/f.txt");
+
+    let c = conflict(&merge, "vendor/f.txt");
+    assert_eq!(stage_oids(c), [None, Some(ours_oid), Some(their_oid)]);
+    for slot in [&c.stages[1], &c.stages[2]] {
+        let (mode, _) = slot.expect("stage present");
+        assert!(mode.is_blob(), "stage mode not a blob: {mode:?}");
+    }
 }
 
 // ── Three-way "update": a recorded base is the merge ancestor ─────────────────
@@ -505,12 +566,51 @@ fn update_both_sides_changed_conflicts() {
 
     let merge = repo.merge_vendor(&e, ours, theirs).expect("merge_vendor");
 
-    assert_eq!(merge.conflicts, &["lib/f.txt"]);
+    assert_eq!(conflict_paths(&merge), &["lib/f.txt"]);
     let body = blob_at(&repo, merge.result_tree, "lib/f.txt")
         .as_bstr()
         .to_string();
     assert!(body.contains("local-change"), "ours missing: {body:?}");
     assert!(body.contains("upstream-change"), "theirs missing: {body:?}");
+}
+
+/// A three-way update conflict records all three stages: stage 1 ("base") the
+/// recorded-base blob, stage 2 ("ours") the local blob, stage 3 ("theirs") the
+/// upstream blob — each from its own filtered tree, proving the base slot is
+/// populated when a merge ancestor exists.
+#[test]
+fn update_conflict_records_all_three_stages() {
+    let upstream = tempfile::tempdir().unwrap();
+    let base = upstream_two_commits(upstream.path(), &[("src/f.txt", b"base\n")], |d| {
+        write(d, "src/f.txt", b"upstream-change\n");
+    });
+    let (bare, repo) = make_bare();
+    let ours = commit_into(
+        bare.path(),
+        "refs/scratch/ours",
+        &[("lib/f.txt", b"local-change\n")],
+        Some("lib/* vendor=mylib\n"),
+    );
+    let e = update_entry(upstream.path().to_str().unwrap(), base);
+    let theirs = repo.fetch_vendor(&e).expect("fetch_vendor");
+
+    let merge = repo.merge_vendor(&e, ours, theirs).expect("merge_vendor");
+
+    let base_tree = repo
+        .base_tree(&e)
+        .expect("base_tree")
+        .expect("recorded base");
+    let ours_tree = repo.ours_tree(&e, ours).expect("ours_tree");
+    let their_tree = repo.upstream_tree(&e, theirs).expect("upstream_tree");
+    let base_oid = oid_at(&repo, base_tree, "lib/f.txt");
+    let ours_oid = oid_at(&repo, ours_tree, "lib/f.txt");
+    let their_oid = oid_at(&repo, their_tree, "lib/f.txt");
+
+    let c = conflict(&merge, "lib/f.txt");
+    assert_eq!(
+        stage_oids(c),
+        [Some(base_oid), Some(ours_oid), Some(their_oid)]
+    );
 }
 
 /// Upstream deleted a file the local side left untouched since the base: the

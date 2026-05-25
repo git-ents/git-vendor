@@ -10,7 +10,7 @@ pub use exe::VendorWorktree;
 use gix::bstr::ByteSlice as _;
 use gix::remote::fetch::{Status, refs::update::Mode};
 pub use vendor::{
-    PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorMode, VendorName,
+    ConflictStages, PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorMode, VendorName,
     VendorRepository, VendorStatus,
 };
 
@@ -317,28 +317,48 @@ impl VendorRepository for gix::Repository {
         let options = self.tree_merge_options()?;
         let mut outcome = self.merge_trees(ancestor, our_tree, their_tree, labels, options)?;
 
-        // Use git's own notion of "unresolved" (the default `TreatAsUnresolved`):
-        // a content merge that still carries markers, or an undecidable tree
-        // merge. No resolution strategy is configured, so every genuine
-        // conflict qualifies and none is silently dropped. Collect into a
-        // sorted set so the path list is deduplicated and deterministic — a
-        // single path can surface as more than one `Conflict`.
+        let result_tree = outcome.tree.write()?.detach();
+
+        // Don't reconstruct the conflicted state by hand: build the index git
+        // itself would leave, then read it back. Starting from the result tree
+        // and applying the conflicting stages (using git's own notion of
+        // "unresolved" — markers or an undecidable tree merge, the default
+        // `TreatAsUnresolved`) yields the canonical unmerged index. It is keyed
+        // by `(path, stage)` with at most one entry per stage, so deduplication
+        // is git's, not ours: a single path that surfaces as several `Conflict`s
+        // (e.g. rename/rename onto one destination) still collapses to one
+        // stage 1/2/3 triple exactly as a stalled `git merge` would record it.
         let how = gix::merge::tree::TreatAsUnresolved::git();
-        let conflict_paths: std::collections::BTreeSet<gix::bstr::BString> = outcome
-            .conflicts
-            .iter()
-            .filter(|c| c.is_unresolved(how))
-            .map(|c| {
-                let (ours_change, _) = c.changes_in_resolution();
-                ours_change.location().to_owned()
+        let mut index = self.index_from_tree(&result_tree)?;
+        outcome.index_changed_after_applying_conflicts(
+            &mut index,
+            how,
+            gix::merge::tree::apply_index_entries::RemovalMode::Prune,
+        );
+
+        use gix::index::entry::Stage;
+        let mut by_path: std::collections::BTreeMap<
+            gix::bstr::BString,
+            [Option<(gix::objs::tree::EntryMode, gix::ObjectId)>; 3],
+        > = std::collections::BTreeMap::new();
+        for e in index.entries() {
+            let stage = match e.stage() {
+                Stage::Base => 0,
+                Stage::Ours => 1,
+                Stage::Theirs => 2,
+                Stage::Unconflicted => continue,
+            };
+            if let Some(mode) = e.mode.to_tree_entry_mode() {
+                by_path.entry(e.path(&index).to_owned()).or_default()[stage] = Some((mode, e.id));
+            }
+        }
+        let conflicts = by_path
+            .into_iter()
+            .map(|(path, stages)| crate::ConflictStages {
+                path: path.to_str_lossy().into_owned(),
+                stages,
             })
             .collect();
-        let conflicts = conflict_paths
-            .into_iter()
-            .map(|p| p.to_str_lossy().into_owned())
-            .collect();
-
-        let result_tree = outcome.tree.write()?.detach();
 
         Ok(VendorMerge {
             upstream_commit: theirs,
@@ -358,12 +378,17 @@ impl VendorRepository for gix::Repository {
         merge: &VendorMerge,
     ) -> Result<gix::ObjectId, Error> {
         if merge.has_conflicts() {
+            let paths = merge
+                .conflicts
+                .iter()
+                .map(|c| c.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(Error::Conflict(format!(
-                "vendor '{}' has {} unresolved conflict(s): {}; resolve them in \
-                 the working tree before committing",
+                "vendor '{}' has {} unresolved conflict(s): {paths}; resolve them \
+                 in the working tree before committing",
                 entry.name,
                 merge.conflicts.len(),
-                merge.conflicts.join(", "),
             )));
         }
 

@@ -245,7 +245,7 @@ proptest! {
 
         let local_path = format!("vendor/{file}");
         prop_assert!(
-            !m.conflicts.iter().any(|c| c == &local_path),
+            !m.conflicts.iter().any(|c| c.path == local_path),
             "identical add reported as conflict: {:?}",
             m.conflicts,
         );

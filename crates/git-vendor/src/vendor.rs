@@ -423,8 +423,26 @@ pub struct VendorMerge {
     /// Textual conflicts are written with conflict markers; binary conflicts keep
     /// the local ("ours") blob. The conflicting paths are listed in `conflicts`.
     pub result_tree: gix::ObjectId,
-    /// Local paths with unresolved conflicts, empty on a clean merge.
-    pub conflicts: Vec<String>,
+    /// The unresolved conflicts, empty on a clean merge.
+    ///
+    /// Each carries the stage versions needed to reconstruct an unmerged index
+    /// entry, so the conflicted state can be projected onto the working copy by
+    /// [`VendorWorktree::checkout_vendor_conflicted`](crate::VendorWorktree::checkout_vendor_conflicted)
+    /// without re-running the merge.
+    pub conflicts: Vec<ConflictStages>,
+}
+
+/// A single conflicted path with the three merge-stage versions git records in
+/// an unmerged index entry.
+///
+/// In local path space. A stage is `None` when that side lacks the path — e.g.
+/// stage 1 (base) on an add/add, or stage 2/3 on a modify/delete.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ConflictStages {
+    /// The conflicting local path.
+    pub path: String,
+    /// Stage 1/2/3 versions: `[base, ours, theirs]`, each `(mode, blob)`.
+    pub stages: [Option<(gix::objs::tree::EntryMode, gix::ObjectId)>; 3],
 }
 
 impl VendorMerge {
