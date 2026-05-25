@@ -134,8 +134,34 @@ impl VendorRepository for gix::Repository {
         }
     }
 
-    fn vendor_status(&self, _entry: &VendorEntry) -> Result<VendorStatus, Error> {
-        todo!()
+    fn vendor_status(&self, entry: &VendorEntry) -> Result<VendorStatus, Error> {
+        let Some(mut reference) = self.try_find_reference(&entry.vendor_ref())? else {
+            return Ok(VendorStatus::NotFetched);
+        };
+        let upstream = reference.peel_to_id()?.detach();
+
+        // No recorded base: fetched but never merged, so the tip is the first
+        // update to apply.
+        let Some(base) = entry.base else {
+            return Ok(VendorStatus::UpdateAvailable { upstream });
+        };
+
+        if upstream == base {
+            return Ok(VendorStatus::UpToDate);
+        }
+
+        // The tip is an update iff `base` is an ancestor of it, i.e. the best
+        // merge-base of the two equals `base`. Unrelated histories (no merge
+        // base) mean upstream rewound or rewrote past `base`.
+        match self.merge_base(base, upstream) {
+            Ok(merge_base) if merge_base.detach() == base => {
+                Ok(VendorStatus::UpdateAvailable { upstream })
+            }
+            Ok(_) | Err(gix::repository::merge_base::Error::NotFound { .. }) => {
+                Ok(VendorStatus::ForcePushed { upstream })
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn upstream_tree(

@@ -50,4 +50,5 @@ impl_gix_from! {
     gix::repository::merge_trees::Error,
     gix::repository::tree_merge_options::Error,
     gix::config::attribute_stack::Error,
+    gix::repository::merge_base::Error,
 }
