@@ -38,10 +38,13 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
+      - uses: taiki-e/install-action@nextest
       - name: Build and compile project
-        run: cargo test --workspace --all-features --no-run
+        run: cargo nextest run --workspace --all-features --no-run
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
@@ -60,10 +63,13 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
+      - uses: taiki-e/install-action@nextest
       - name: Build and compile project
-        run: cargo test --workspace --all-features --no-run
+        run: cargo nextest run --workspace --all-features --no-run
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
@@ -78,10 +84,13 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
+      - uses: taiki-e/install-action@nextest
       - name: Build and compile project
-        run: cargo test --workspace --all-features --no-run
+        run: cargo nextest run --workspace --all-features --no-run
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
@@ -96,10 +105,13 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
+      - uses: taiki-e/install-action@nextest
       - name: Build and compile project
-        run: cargo test --workspace --all-features --no-run
+        run: cargo nextest run --workspace --all-features --no-run
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo nextest run --workspace --all-features
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features
 
   man:
     name: man-generation
