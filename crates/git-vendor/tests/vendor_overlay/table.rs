@@ -11,41 +11,9 @@
 //! `.gitattributes` and a mix of vendored and unrelated files; only the commit
 //! object database is read.
 
-use std::collections::BTreeMap;
-use std::path::Path;
-
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
-use gix::bstr::ByteSlice as _;
 
-// ── git helpers ───────────────────────────────────────────────────────────────
-
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-fn write(dir: &Path, rel: &str, contents: &[u8]) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn init(dir: &Path) {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-}
+use crate::support::{build_tree, git, init, tree_entries, write};
 
 fn entry(name: &str) -> VendorEntry {
     VendorEntry {
@@ -59,31 +27,6 @@ fn entry(name: &str) -> VendorEntry {
         }],
         mode: VendorMode::Merge,
     }
-}
-
-/// Build a tree in `repo`'s object database from `path -> bytes` pairs.
-fn build_tree(repo: &gix::Repository, files: &[(&str, &[u8])]) -> gix::ObjectId {
-    let mut editor = repo.empty_tree().edit().unwrap();
-    for (path, bytes) in files {
-        let blob = repo.write_blob(bytes).unwrap().detach();
-        editor
-            .upsert(*path, gix::objs::tree::EntryKind::Blob, blob)
-            .unwrap();
-    }
-    editor.write().unwrap().detach()
-}
-
-/// Flatten a tree into `path -> blob oid`, skipping trees.
-fn tree_entries(repo: &gix::Repository, tree: gix::ObjectId) -> BTreeMap<String, gix::ObjectId> {
-    let tree = repo.find_tree(tree).expect("find tree");
-    tree.traverse()
-        .breadthfirst
-        .files()
-        .expect("traverse")
-        .into_iter()
-        .filter(|r| !r.mode.is_tree())
-        .map(|r| (r.filepath.to_str_lossy().into_owned(), r.oid))
-        .collect()
 }
 
 fn blob_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> Vec<u8> {

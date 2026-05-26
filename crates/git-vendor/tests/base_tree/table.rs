@@ -7,45 +7,9 @@
 //! ancestor at the merge site, never a value that `base_tree` itself
 //! fabricates.
 
-use std::path::Path;
-
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
-
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-/// Initialize a git repo at `dir` with one commit on `main`.
-fn make_upstream(dir: &Path) {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-    std::fs::write(dir.join("hello.txt"), b"hello").unwrap();
-    git(&["add", "."], dir);
-    git(&["commit", "-m", "init"], dir);
-}
-
-/// Initialize a bare local repo that will fetch from upstream.
-fn make_local(dir: &Path) -> gix::Repository {
-    git(&["init", "--bare", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-    gix::open(dir).expect("gix open")
-}
+use crate::support::{make_local, make_upstream};
 
 fn entry_without_base(url: &str) -> VendorEntry {
     VendorEntry {

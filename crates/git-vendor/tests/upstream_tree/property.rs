@@ -17,6 +17,8 @@ use git_vendor::{
 use gix::bstr::ByteSlice as _;
 use proptest::prelude::*;
 
+use crate::support::git;
+
 // ── Shared fixture ────────────────────────────────────────────────────────────
 
 struct Fixture {
@@ -24,18 +26,6 @@ struct Fixture {
     _local: tempfile::TempDir,
     local: PathBuf,
     tip: gix::ObjectId,
-}
-
-fn git(args: &[&str], dir: &std::path::Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(output.status.success(), "git {args:?} failed in {dir:?}");
 }
 
 fn fixture() -> &'static Fixture {

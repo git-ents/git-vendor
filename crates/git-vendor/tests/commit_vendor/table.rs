@@ -13,66 +13,12 @@
 //! local ("ours") commit fetched in and an upstream commit fetched via
 //! `fetch_vendor`, then a real merge produced to commit.
 
-use std::collections::BTreeMap;
-use std::path::Path;
-
 use git_vendor::{
     PatternMapping, VendorEntry, VendorMerge, VendorMode, VendorName, VendorRepository as _,
 };
 use gix::bstr::ByteSlice as _;
 
-// ── git helpers ───────────────────────────────────────────────────────────────
-
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-fn git_capture(args: &[&str], dir: &Path) -> Vec<u8> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    output.stdout
-}
-
-fn write(dir: &Path, rel: &str, contents: &[u8]) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-/// Flatten a tree into `path -> blob oid`, skipping trees.
-fn tree_entries(repo: &gix::Repository, tree: gix::ObjectId) -> BTreeMap<String, gix::ObjectId> {
-    let tree = repo.find_tree(tree).expect("find tree");
-    tree.traverse()
-        .breadthfirst
-        .files()
-        .expect("traverse")
-        .into_iter()
-        .filter(|r| !r.mode.is_tree())
-        .map(|r| (r.filepath.to_str_lossy().into_owned(), r.oid))
-        .collect()
-}
+use crate::support::{git, git_capture, init, tree_entries, write};
 
 fn blob_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> Vec<u8> {
     let oid = tree_entries(repo, tree)
@@ -80,12 +26,6 @@ fn blob_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> Vec<u8> {
         .copied()
         .unwrap_or_else(|| panic!("path {path:?} absent from tree"));
     repo.find_object(oid).expect("find blob").data.clone()
-}
-
-fn init(dir: &Path) {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
 }
 
 fn sig<'a>(name: &'a str, email: &'a str, time: &'a str) -> gix::actor::SignatureRef<'a> {

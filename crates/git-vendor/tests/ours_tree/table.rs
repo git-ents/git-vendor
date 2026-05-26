@@ -9,52 +9,13 @@
 //! preserves blob identity and mode: it is the local-path subtree, not a
 //! rewrite.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use gix::bstr::ByteSlice as _;
 use rstest::rstest;
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
-
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-fn write(dir: &Path, rel: &str, contents: &[u8]) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-/// Initialize a non-bare repo, run `init`, then a single `commit` of whatever
-/// has been written into the working tree, and return the repo and the commit.
-fn commit(dir: &Path) -> (gix::Repository, gix::ObjectId) {
-    git(&["add", "-A"], dir);
-    git(&["commit", "-m", "init"], dir);
-    let repo = gix::open(dir).expect("gix open");
-    let head = repo.head_commit().expect("head commit").id().detach();
-    (repo, head)
-}
-
-fn init(dir: &Path) {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-}
+use crate::support::{commit, git, git_capture, init, paths, tree_entries, write};
 
 /// The shared fixture: a fixed multi-directory layout whose root
 /// `.gitattributes` assigns `vendor=<name>` to several paths, including a
@@ -104,23 +65,6 @@ fn pat(glob: &str, destination: Option<&str>) -> PatternMapping {
     }
 }
 
-/// Flatten a tree into a fully ordered `path -> blob oid` map, skipping trees.
-fn tree_entries(repo: &gix::Repository, tree: gix::ObjectId) -> BTreeMap<String, gix::ObjectId> {
-    let mut out = BTreeMap::new();
-    let tree = repo.find_tree(tree).expect("find tree");
-    for record in tree.traverse().breadthfirst.files().expect("traverse") {
-        if record.mode.is_tree() {
-            continue;
-        }
-        out.insert(record.filepath.to_str_lossy().into_owned(), record.oid);
-    }
-    out
-}
-
-fn paths(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<String> {
-    tree_entries(repo, tree).into_keys().collect()
-}
-
 /// Result paths as raw bytes — the only faithful view when a path is not
 /// UTF-8; `paths`/`tree_entries` would lossily mangle it.
 #[cfg(unix)]
@@ -142,22 +86,6 @@ fn raw_paths(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<gix::bstr::BStr
 // (e.g. APFS), so these build the tree through the index with git plumbing —
 // the same `git` CLI idiom as the rest of the file — and the path never
 // touches disk.
-
-fn git_capture(args: &[&str], dir: &Path) -> Vec<u8> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    output.stdout
-}
 
 /// `git hash-object -w -t <kind>`, content piped on stdin; returns the hex oid.
 fn hash_object(dir: &Path, kind: &str, content: &[u8]) -> String {

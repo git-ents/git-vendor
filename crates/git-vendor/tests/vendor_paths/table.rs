@@ -14,43 +14,7 @@ use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepo
 use gix::bstr::BString;
 use rstest::rstest;
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
-
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-fn write(dir: &Path, rel: &str, contents: &[u8]) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn init(dir: &Path) {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-}
-
-fn commit(dir: &Path) -> (gix::Repository, gix::ObjectId) {
-    git(&["add", "-A"], dir);
-    git(&["commit", "-m", "init"], dir);
-    let repo = gix::open(dir).expect("gix open");
-    let head = repo.head_commit().expect("head commit").id().detach();
-    (repo, head)
-}
+use crate::support::{commit, git, init, write};
 
 /// The shared fixture: a fixed layout whose root `.gitattributes` assigns
 /// `vendor=<name>` to several paths, with a trailing `-vendor` rule that must

@@ -7,7 +7,6 @@
 //! upstream history with a fixed layout, fetches it into a bare local repo so
 //! the objects are in the local odb, and the cases vary only the patterns.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use git_vendor::{
@@ -16,23 +15,9 @@ use git_vendor::{
 use gix::bstr::ByteSlice as _;
 use rstest::rstest;
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
+use crate::support::{git, make_local, paths, tree_entries};
 
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
+// ── Fixture helpers ───────────────────────────────────────────────────────────
 
 /// Run git feeding `stdin` and returning trimmed stdout bytes. Used to drive
 /// plumbing (`hash-object`, `mktree -z`, `commit-tree`) so a tree entry can
@@ -83,12 +68,6 @@ fn make_upstream(dir: &Path) {
     git(&["commit", "-m", "init"], dir);
 }
 
-/// Initialize a bare local repo that will fetch from upstream.
-fn make_local(dir: &Path) -> gix::Repository {
-    git(&["init", "--bare", "-b", "main"], dir);
-    gix::open(dir).expect("gix open")
-}
-
 fn entry(url: &str, patterns: Vec<PatternMapping>) -> VendorEntry {
     VendorEntry {
         name: VendorName::new("mylib").unwrap(),
@@ -122,23 +101,6 @@ fn fixture() -> (
     let probe = entry(upstream.path().to_str().unwrap(), vec![]);
     let tip = repo.fetch_vendor(&probe).expect("fetch_vendor");
     (upstream, local, repo, tip)
-}
-
-/// Flatten a tree object into a `local path -> blob oid` map, skipping trees.
-fn tree_entries(repo: &gix::Repository, tree: gix::ObjectId) -> BTreeMap<String, gix::ObjectId> {
-    let mut out = BTreeMap::new();
-    let tree = repo.find_tree(tree).expect("find tree");
-    for record in tree.traverse().breadthfirst.files().expect("traverse") {
-        if record.mode.is_tree() {
-            continue;
-        }
-        out.insert(record.filepath.to_str_lossy().into_owned(), record.oid);
-    }
-    out
-}
-
-fn paths(repo: &gix::Repository, tree: gix::ObjectId) -> Vec<String> {
-    tree_entries(repo, tree).into_keys().collect()
 }
 
 // ── Single-pattern selection and remapping ────────────────────────────────────

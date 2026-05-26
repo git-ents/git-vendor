@@ -8,34 +8,17 @@
 //! find-and-peel path.
 
 use std::path::Path;
-use std::process::Command;
 
 use git_vendor::{VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use proptest::prelude::*;
 
-// ── Fixture helpers ───────────────────────────────────────────────────────────
+use crate::support::{git, init};
 
-fn git(args: &[&str], dir: &Path) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
+// ── Fixture helpers ───────────────────────────────────────────────────────────
 
 /// A repo with one commit, returning its gix handle and the commit OID.
 fn repo_with_commit(dir: &Path) -> (gix::Repository, gix::ObjectId) {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
+    init(dir);
     std::fs::write(dir.join("hello.txt"), b"hello").unwrap();
     git(&["add", "."], dir);
     git(&["commit", "-m", "init"], dir);

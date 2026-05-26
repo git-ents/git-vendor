@@ -15,30 +15,14 @@ use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepo
 use gix::bstr::{BString, ByteSlice as _};
 use proptest::prelude::*;
 
+use crate::support::{git, git_capture, write};
+
 // ── Shared fixture ────────────────────────────────────────────────────────────
 
 struct Fixture {
     _dir: tempfile::TempDir,
     repo: PathBuf,
     ours: gix::ObjectId,
-}
-
-fn git(args: &[&str], dir: &Path) -> std::process::Output {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("git");
-    assert!(output.status.success(), "git {args:?} failed in {dir:?}");
-    output
-}
-
-fn write(dir: &Path, rel: &str, contents: &[u8]) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
 }
 
 fn fixture() -> &'static Fixture {
@@ -92,8 +76,8 @@ fn oracle_paths(repo: &Path, name: &str) -> BTreeSet<String> {
         "oracle would conflate git attribute state word {name:?} with a value",
     );
 
-    let out = git(&["ls-tree", "-r", "--name-only", "HEAD"], repo);
-    let files: Vec<String> = String::from_utf8(out.stdout)
+    let out = git_capture(&["ls-tree", "-r", "--name-only", "HEAD"], repo);
+    let files: Vec<String> = String::from_utf8(out)
         .unwrap()
         .lines()
         .map(str::to_owned)
@@ -101,8 +85,7 @@ fn oracle_paths(repo: &Path, name: &str) -> BTreeSet<String> {
 
     let mut args = vec!["check-attr", "vendor", "--"];
     args.extend(files.iter().map(String::as_str));
-    let out = git(&args, repo);
-    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stdout = String::from_utf8(git_capture(&args, repo)).unwrap();
 
     let mut selected = BTreeSet::new();
     for (line, file) in stdout.lines().zip(&files) {

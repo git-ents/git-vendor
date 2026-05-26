@@ -9,12 +9,13 @@
 //! repo and fuzzes the name and patterns.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
-use gix::bstr::ByteSlice as _;
 use proptest::prelude::*;
+
+use crate::support::{git, git_capture, tree_entries, write};
 
 // ── Shared fixture ────────────────────────────────────────────────────────────
 
@@ -22,24 +23,6 @@ struct Fixture {
     _dir: tempfile::TempDir,
     repo: PathBuf,
     ours: gix::ObjectId,
-}
-
-fn git(args: &[&str], dir: &Path) -> std::process::Output {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("git");
-    assert!(output.status.success(), "git {args:?} failed in {dir:?}");
-    output
-}
-
-fn write(dir: &Path, rel: &str, contents: &[u8]) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
 }
 
 fn fixture() -> &'static Fixture {
@@ -86,9 +69,9 @@ fn fixture() -> &'static Fixture {
 /// The independent oracle: git's own attribute machinery. Enumerate the tracked
 /// files of `ours` and ask `git check-attr` which carry `vendor=<name>`. This
 /// is exactly the set `ours_tree` must reproduce, derived without our resolver.
-fn oracle_paths(repo: &Path, name: &str) -> BTreeSet<String> {
-    let out = git(&["ls-tree", "-r", "--name-only", "HEAD"], repo);
-    let files: Vec<String> = String::from_utf8(out.stdout)
+fn oracle_paths(repo: &std::path::Path, name: &str) -> BTreeSet<String> {
+    let out = git_capture(&["ls-tree", "-r", "--name-only", "HEAD"], repo);
+    let files: Vec<String> = String::from_utf8(out)
         .unwrap()
         .lines()
         .map(str::to_owned)
@@ -96,8 +79,7 @@ fn oracle_paths(repo: &Path, name: &str) -> BTreeSet<String> {
 
     let mut args = vec!["check-attr", "vendor", "--"];
     args.extend(files.iter().map(String::as_str));
-    let out = git(&args, repo);
-    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stdout = String::from_utf8(git_capture(&args, repo)).unwrap();
 
     let mut selected = BTreeSet::new();
     for (line, file) in stdout.lines().zip(&files) {
@@ -111,29 +93,8 @@ fn oracle_paths(repo: &Path, name: &str) -> BTreeSet<String> {
 }
 
 fn result_paths(repo: &gix::Repository, tree: gix::ObjectId) -> BTreeSet<String> {
-    let tree = repo.find_tree(tree).expect("find tree");
-    tree.traverse()
-        .breadthfirst
-        .files()
-        .expect("traverse")
-        .into_iter()
-        .filter(|r| !r.mode.is_tree())
-        .map(|r| r.filepath.to_str_lossy().into_owned())
-        .collect()
-}
-
-fn tree_entries(
-    repo: &gix::Repository,
-    tree: gix::ObjectId,
-) -> std::collections::BTreeMap<String, gix::ObjectId> {
-    let tree = repo.find_tree(tree).expect("find tree");
-    tree.traverse()
-        .breadthfirst
-        .files()
-        .expect("traverse")
-        .into_iter()
-        .filter(|r| !r.mode.is_tree())
-        .map(|r| (r.filepath.to_str_lossy().into_owned(), r.oid))
+    crate::support::tree_entries(repo, tree)
+        .into_keys()
         .collect()
 }
 

@@ -5,67 +5,18 @@ use std::path::Path;
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
 use rstest::rstest;
 
+use crate::support::{git, init, make_local, make_upstream, rev_parse};
+
 // ── Fixture helpers ───────────────────────────────────────────────────────────
-
-fn git(args: &[&str], dir: &Path) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .stdout(std::process::Stdio::null())
-        .output()
-        .expect("git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {dir:?}:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
-/// Run `git rev-parse <rev>` in `dir` and return the resolved OID.
-fn rev_parse(dir: &Path, rev: &str) -> gix::ObjectId {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", rev])
-        .current_dir(dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("rev-parse");
-    assert!(out.status.success(), "rev-parse {rev} failed in {dir:?}");
-    let hex = std::str::from_utf8(&out.stdout).unwrap().trim();
-    gix::ObjectId::from_hex(hex.as_bytes()).expect("valid hex")
-}
-
-/// Initialize a git repo at `dir` with one commit on `main`, returning the HEAD OID.
-fn make_upstream(dir: &Path) -> gix::ObjectId {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-    std::fs::write(dir.join("hello.txt"), b"hello").unwrap();
-    git(&["add", "."], dir);
-    git(&["commit", "-m", "init"], dir);
-    rev_parse(dir, "HEAD")
-}
 
 /// Like [`make_upstream`] but with caller-chosen file content, so two upstreams
 /// have distinct tree (and therefore commit) OIDs regardless of timing.
 fn make_upstream_with(dir: &Path, content: &[u8]) -> gix::ObjectId {
-    git(&["init", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
+    init(dir);
     std::fs::write(dir.join("hello.txt"), content).unwrap();
     git(&["add", "."], dir);
     git(&["commit", "-m", "init"], dir);
     rev_parse(dir, "HEAD")
-}
-
-/// Initialize a bare local repo that will fetch from upstream.
-fn make_local(dir: &Path) -> gix::Repository {
-    git(&["init", "--bare", "-b", "main"], dir);
-    git(&["config", "user.email", "test@example.com"], dir);
-    git(&["config", "user.name", "Test"], dir);
-    gix::open(dir).expect("gix open")
 }
 
 fn make_entry(
