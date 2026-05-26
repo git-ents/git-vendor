@@ -266,15 +266,14 @@ fn stale_empty_vendor_directory_is_not_pruned() {
     );
 }
 
-/// After `dangerously_push_entry` appends vendor entries, `sort_entries` must
-/// restore lexicographic order even when vendor paths sort before some
-/// pre-existing non-vendor paths.
+/// The written index is in lexicographic order even when vendor paths sort
+/// before some pre-existing non-vendor paths.
 #[test]
 fn index_entries_are_sorted_after_checkout() {
     let dir = tempfile::tempdir().unwrap();
     init(dir.path());
-    // z_file.txt sorts after a_vendor/*, so without sort_entries the appended
-    // a_vendor entry would land after z_file.txt — the wrong position.
+    // z_file.txt sorts after a_vendor/*, so the vendor entry must not land
+    // after z_file.txt in the index.
     write(dir.path(), "z_file.txt", b"z\n");
     write(dir.path(), ".gitattributes", b"a_vendor/* vendor=mylib\n");
     write(dir.path(), "a_vendor/old.txt", b"old\n");
