@@ -1,0 +1,17 @@
+= Critical Bug in Commit Method
+
+:author: Joey Carpinelli
+:caused-by: b8da2b3
+:fixed-by: 881d96c
+
+== Description
+
+While the commit parents were set correctly in `commit_vendor`, the commit tree was set incorrectly to the _subtree_ of the local repository with content vendored from the upstream repository.
+Instead, the commit tree should have been set to the full commit tree, with new content merged in appropriately.
+Unit tests failed to find this issue, because they had not checked for non-vendored tree content.
+The issue was found when developing `VendorWorktree` methods.
+
+== Lesson Learned
+
+I believe this issue could have been caught earlier if all methods were documented more clearly, perhaps with a design document.
+I had conflated the roles of the `merge_vendor` and `commit_vendor` because they were named so similarly.
