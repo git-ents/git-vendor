@@ -6,7 +6,7 @@
 //! of the one working copy and its ambient `HEAD`/index state, kept distinct
 //! from the pure object-database operations.
 
-use crate::{Error, VendorEntry, VendorMerge, VendorWorktree};
+use crate::{Error, VendorEntry, VendorMerge, VendorRepository, VendorWorktree};
 
 impl VendorWorktree for gix::Repository {
     fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error> {
@@ -23,13 +23,10 @@ impl VendorWorktree for gix::Repository {
         // paths) is delegated to gix and is not covered by automated tests.
         let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
 
-        let old_paths: std::collections::BTreeSet<gix::bstr::BString> = self
-            .head_commit()
-            .ok()
-            .and_then(|c| {
-                let id = c.id().detach();
-                crate::resolve_vendor_paths(self, entry, id).ok()
-            })
+        let head_id = self.head_commit().ok().map(|c| c.id().detach());
+
+        let old_paths: std::collections::BTreeSet<gix::bstr::BString> = head_id
+            .and_then(|id| crate::resolve_vendor_paths(self, entry, id).ok())
             .into_iter()
             .flatten()
             .collect();
@@ -67,25 +64,29 @@ impl VendorWorktree for gix::Repository {
             }
         }
 
-        let mut main_index = if self.git_dir().join("index").exists() {
-            self.open_index().map_err(|e| Error::Gix(Box::new(e)))?
-        } else {
-            // Unborn HEAD: no .git/index exists yet; start from empty.
-            gix::index::File::from_state(
-                gix::index::State::new(self.object_hash()),
-                self.git_dir().join("index"),
-            )
+        // Overlay the vendor tree onto the full HEAD tree and rebuild the index
+        // from the result. An unborn HEAD has no base commit, so the vendor tree
+        // is itself the whole tree.
+        let full_tree = match head_id {
+            Some(id) => self.vendor_overlay(entry, id, tree)?,
+            None => tree,
         };
+        let mut main_index = self.index_from_tree(&full_tree)?;
+        main_index.set_path(self.git_dir().join("index"));
 
-        let all_managed: std::collections::BTreeSet<gix::bstr::BString> =
-            old_paths.iter().chain(new_paths.iter()).cloned().collect();
-        main_index.remove_entries(|_, path, _| all_managed.contains(path));
-
-        for e in vendor_index.entries() {
-            let path = e.path(&vendor_index);
-            main_index.dangerously_push_entry(e.stat, e.id, e.flags, e.mode, path);
+        // `index_from_tree` zeroes stat data; carry over the stats checkout just
+        // populated on the vendor entries so `git status` need not re-hash them.
+        let vendor_stats: std::collections::HashMap<gix::bstr::BString, gix::index::entry::Stat> =
+            vendor_index
+                .entries()
+                .iter()
+                .map(|e| (e.path(&vendor_index).to_owned(), e.stat))
+                .collect();
+        for (e, path) in main_index.entries_mut_with_paths() {
+            if let Some(stat) = vendor_stats.get(path) {
+                e.stat = *stat;
+            }
         }
-        main_index.sort_entries();
 
         main_index
             .write(gix::index::write::Options::default())

@@ -374,6 +374,26 @@ impl VendorRepository for gix::Repository {
         })
     }
 
+    fn vendor_overlay(
+        &self,
+        entry: &VendorEntry,
+        base_commit: gix::ObjectId,
+        vendor_tree: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error> {
+        let mut editor = self.find_commit(base_commit)?.tree()?.edit()?;
+        for path in resolve_vendor_paths(self, entry, base_commit)? {
+            editor.remove(path.as_bstr())?;
+        }
+        let result = self.find_object(vendor_tree)?.into_tree();
+        for record in result.traverse().breadthfirst.files()? {
+            if record.mode.is_tree() {
+                continue;
+            }
+            editor.upsert(record.filepath.as_bstr(), record.mode.kind(), record.oid)?;
+        }
+        Ok(editor.write()?.detach())
+    }
+
     fn commit_vendor<'a, 'c>(
         &self,
         committer: impl Into<gix::actor::SignatureRef<'c>>,
@@ -434,24 +454,7 @@ impl VendorRepository for gix::Repository {
             merge.upstream_commit
         };
 
-        // Splice the vendor-only result_tree into the full parent tree: remove
-        // old vendor paths (they may have changed names or disappeared) then
-        // upsert every entry from the merge result. This produces a root tree
-        // that carries the merged vendor content alongside all non-vendored files.
-        let full_tree = {
-            let mut editor = self.find_commit(parent)?.tree()?.edit()?;
-            for path in resolve_vendor_paths(self, entry, parent)? {
-                editor.remove(path.as_bstr())?;
-            }
-            let result = self.find_object(merge.result_tree)?.into_tree();
-            for record in result.traverse().breadthfirst.files()? {
-                if record.mode.is_tree() {
-                    continue;
-                }
-                editor.upsert(record.filepath.as_bstr(), record.mode.kind(), record.oid)?;
-            }
-            editor.write()?.detach()
-        };
+        let full_tree = self.vendor_overlay(entry, parent, merge.result_tree)?;
 
         let commit = gix::objs::Commit {
             tree: full_tree,

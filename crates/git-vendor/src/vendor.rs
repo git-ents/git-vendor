@@ -529,6 +529,23 @@ pub trait VendorRepository {
         theirs: gix::ObjectId,
     ) -> Result<VendorMerge, Error>;
 
+    /// Splice `vendor_tree` into the full tree of `base_commit`, returning the
+    /// new full-tree OID.
+    ///
+    /// Removes the vendor's currently-owned paths in `base_commit`
+    /// ([`vendor_paths`](Self::vendor_paths) — they may have been renamed or
+    /// dropped) then upserts every entry from `vendor_tree`. The result carries
+    /// the vendor content alongside all non-vendored files, so it is suitable
+    /// both as a commit's root tree ([`commit_vendor`](Self::commit_vendor)) and
+    /// as the basis for a working-copy projection
+    /// ([`VendorWorktree::checkout_vendor`](crate::VendorWorktree::checkout_vendor)).
+    fn vendor_overlay(
+        &self,
+        entry: &VendorEntry,
+        base_commit: gix::ObjectId,
+        vendor_tree: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error>;
+
     /// Mint the merge commit recording `merge` on top of the `parent` local
     /// commit, returning the new local commit.
     ///
