@@ -40,6 +40,7 @@ fn init(dir: &Path) {
     git(&["init", "-b", "main"], dir);
     git(&["config", "user.email", "test@example.com"], dir);
     git(&["config", "user.name", "Test"], dir);
+    git(&["config", "core.autocrlf", "input"], dir);
 }
 
 fn entry() -> VendorEntry {
