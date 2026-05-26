@@ -84,8 +84,8 @@ struct Built {
 }
 
 /// A non-bare repo whose `HEAD` carries `vendor/* vendor=mylib`, two vendored
-/// files (`vendor/keep.txt`, `vendor/old.txt`), two unrelated files
-/// (`README`, `.gitattributes`), and one untracked file (`untracked.txt`).
+/// files (`vendor/keep.txt`, `vendor/old.txt`) and two unrelated files
+/// (`README`, `.gitattributes`).
 fn build() -> Built {
     let dir = tempfile::tempdir().unwrap();
     init(dir.path());
@@ -147,11 +147,16 @@ fn removes_vendor_paths_absent_from_new_tree() {
         !paths.contains(&"vendor/old.txt".to_owned()),
         "stale vendor path must be removed from the index: {paths:?}",
     );
+
+    assert!(
+        workdir.join("untracked.txt").exists(),
+        "untracked content must not be modified"
+    );
 }
 
-/// Files outside the vendor's set — tracked non-vendor files, the
-/// `.gitattributes` that defines membership, and untracked
-/// files — are left untouched in the working copy and the index.
+/// Files outside the vendor's set — both tracked non-vendor files and the
+/// `.gitattributes` that defines membership — are left untouched in the working
+/// copy and the index.
 #[test]
 fn leaves_unrelated_files_untouched() {
     let b = build();
