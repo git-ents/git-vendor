@@ -434,8 +434,27 @@ impl VendorRepository for gix::Repository {
             merge.upstream_commit
         };
 
+        // Splice the vendor-only result_tree into the full parent tree: remove
+        // old vendor paths (they may have changed names or disappeared) then
+        // upsert every entry from the merge result. This produces a root tree
+        // that carries the merged vendor content alongside all non-vendored files.
+        let full_tree = {
+            let mut editor = self.find_commit(parent)?.tree()?.edit()?;
+            for path in resolve_vendor_paths(self, entry, parent)? {
+                editor.remove(path.as_bstr())?;
+            }
+            let result = self.find_object(merge.result_tree)?.into_tree();
+            for record in result.traverse().breadthfirst.files()? {
+                if record.mode.is_tree() {
+                    continue;
+                }
+                editor.upsert(record.filepath.as_bstr(), record.mode.kind(), record.oid)?;
+            }
+            editor.write()?.detach()
+        };
+
         let commit = gix::objs::Commit {
-            tree: merge.result_tree,
+            tree: full_tree,
             // First parent is the local "ours" commit; second records the
             // integrated upstream point (see `second_parent` above).
             parents: [parent, second_parent].into_iter().collect(),

@@ -1,7 +1,8 @@
 //! Tests for `commit_vendor`.
 //!
 //! `commit_vendor` mints the merge commit recording a [`VendorMerge`] on top of
-//! the local "ours" commit: a two-parent commit whose tree is the merge result
+//! the local "ours" commit: a two-parent commit whose tree is the vendor-only
+//! merge result spliced into the full `parent` tree (non-vendored files survive)
 //! and whose first parent is the passed `parent`. The second parent is
 //! `merge.upstream_commit` (a real edge into the `refs/vendor/<name>` graph) by
 //! default, or — when `entry.mode` is `Squash` — a fresh parentless commit holding
@@ -171,9 +172,10 @@ fn build() -> Built {
     }
 }
 
-/// The minted commit's tree is `merge.result_tree`, and its parents are exactly
-/// `[parent, merge.upstream_commit]` in that order — the local "ours" commit
-/// first, the upstream commit second.
+/// The minted commit's tree is the vendor-only `merge.result_tree` spliced into
+/// the full `parent` tree — non-vendored files (`README`, `.gitattributes`)
+/// survive alongside the merged vendor content — and its parents are exactly
+/// `[parent, merge.upstream_commit]` in that order: "ours" first, upstream second.
 #[test]
 fn mints_two_parent_merge_commit() {
     let b = build();
@@ -194,7 +196,25 @@ fn mints_two_parent_merge_commit() {
     let commit = b.repo.find_commit(oid).expect("find_commit");
     let decoded = commit.decode().expect("decode");
 
-    assert_eq!(decoded.tree(), b.merge.result_tree);
+    let tree = decoded.tree();
+    assert_ne!(
+        tree, b.merge.result_tree,
+        "merge commit tree must be the full repo tree, not the vendor-only result",
+    );
+    let paths: Vec<String> = tree_entries(&b.repo, tree).into_keys().collect();
+    assert_eq!(
+        paths,
+        vec![
+            ".gitattributes".to_owned(),
+            "README".to_owned(),
+            "vendor/keep.txt".to_owned(),
+            "vendor/x.txt".to_owned(),
+        ],
+    );
+    assert_eq!(blob_at(&b.repo, tree, "README"), b"scratch");
+    assert_eq!(blob_at(&b.repo, tree, "vendor/keep.txt"), b"local\n");
+    assert_eq!(blob_at(&b.repo, tree, "vendor/x.txt"), b"upstream\n");
+
     let parents: Vec<gix::ObjectId> = decoded.parents().collect();
     assert_eq!(parents, vec![b.ours, b.merge.upstream_commit]);
 }
@@ -315,7 +335,10 @@ fn squash_second_parent_is_synthetic() {
     let commit = b.repo.find_commit(oid).expect("find_commit");
     let decoded = commit.decode().expect("decode");
 
-    assert_eq!(decoded.tree(), b.merge.result_tree);
+    // The merge commit's tree is the full spliced tree regardless of mode; mode
+    // only changes the second parent. (Tree content is covered in detail by
+    // `mints_two_parent_merge_commit`.)
+    assert_ne!(decoded.tree(), b.merge.result_tree);
     let parents: Vec<gix::ObjectId> = decoded.parents().collect();
     assert_eq!(parents.len(), 2);
     assert_eq!(parents[0], b.ours);
