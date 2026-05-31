@@ -21,3 +21,4 @@ allowed_scopes = [
     "release",
 ]
 merge_commit = false
+no_fixup = false
