@@ -97,10 +97,51 @@ impl VendorWorktree for gix::Repository {
 
     fn checkout_vendor_conflicted(
         &self,
-        _entry: &VendorEntry,
-        _merge: &VendorMerge,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
     ) -> Result<(), Error> {
-        todo!()
+        use gix::bstr::ByteSlice as _;
+
+        // Write the result tree (with conflict markers) to the working copy.
+        self.checkout_vendor(entry, merge.result_tree)?;
+
+        // Reopen the index we just wrote so we can splice in unmerged stages.
+        let mut main_index = self.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
+        main_index.set_path(self.git_dir().join("index"));
+
+        for conflict in &merge.conflicts {
+            let path_bytes = gix::bstr::BString::from(conflict.path.as_bytes());
+            let path_bstr = path_bytes.as_bstr();
+
+            // Remove the stage-0 entry for this path.
+            main_index.remove_entries(|_, p, _| p == path_bstr);
+
+            // Insert stage 1/2/3 entries for each present stage.
+            for (stage_idx, stage_variant) in [
+                (0usize, gix::index::entry::Stage::Base),
+                (1usize, gix::index::entry::Stage::Ours),
+                (2usize, gix::index::entry::Stage::Theirs),
+            ] {
+                if let Some((tree_mode, oid)) = conflict.stages[stage_idx] {
+                    let mode = gix::index::entry::Mode::from(tree_mode);
+                    let flags = gix::index::entry::Flags::from_stage(stage_variant);
+                    main_index.dangerously_push_entry(
+                        gix::index::entry::Stat::default(),
+                        oid,
+                        flags,
+                        mode,
+                        path_bstr,
+                    );
+                }
+            }
+        }
+
+        main_index.sort_entries();
+        main_index
+            .write(gix::index::write::Options::default())
+            .map_err(|e| Error::Gix(Box::new(e)))?;
+
+        Ok(())
     }
 
     fn track_vendor(&self, _entry: &VendorEntry, _paths: &[&str]) -> Result<(), Error> {
