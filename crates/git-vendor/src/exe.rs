@@ -144,8 +144,48 @@ impl VendorWorktree for gix::Repository {
         Ok(())
     }
 
-    fn track_vendor(&self, _entry: &VendorEntry, _paths: &[&str]) -> Result<(), Error> {
-        todo!()
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error> {
+        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
+        let gitattributes = workdir.join(".gitattributes");
+
+        let existing = if gitattributes.exists() {
+            std::fs::read_to_string(&gitattributes)?
+        } else {
+            String::new()
+        };
+
+        let attr_value = format!("vendor={}", entry.name.as_str());
+
+        // Collect lines already attributed to this vendor for idempotency.
+        let already_tracked: std::collections::HashSet<&str> = existing
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(2, ' ');
+                let path = parts.next()?;
+                let attr = parts.next()?.trim();
+                if attr == attr_value { Some(path) } else { None }
+            })
+            .collect();
+
+        let mut out = existing.clone();
+        // Ensure existing content ends with a newline before appending.
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        for path in paths {
+            if !already_tracked.contains(path) {
+                out.push_str(path);
+                out.push(' ');
+                out.push_str(&attr_value);
+                out.push('\n');
+            }
+        }
+
+        if out != existing {
+            std::fs::write(&gitattributes, out.as_bytes())?;
+        }
+
+        Ok(())
     }
 
     fn untrack_vendor(&self, _entry: &VendorEntry, _paths: &[&str]) -> Result<(), Error> {
