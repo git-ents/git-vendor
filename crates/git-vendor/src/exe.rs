@@ -188,8 +188,35 @@ impl VendorWorktree for gix::Repository {
         Ok(())
     }
 
-    fn untrack_vendor(&self, _entry: &VendorEntry, _paths: &[&str]) -> Result<(), Error> {
-        todo!()
+    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error> {
+        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
+        let gitattributes = workdir.join(".gitattributes");
+
+        if !gitattributes.exists() {
+            return Ok(());
+        }
+
+        let existing = std::fs::read_to_string(&gitattributes)?;
+        let attr_value = format!("vendor={}", entry.name.as_str());
+
+        let remove: std::collections::HashSet<&str> = paths.iter().copied().collect();
+
+        let filtered: String = existing
+            .lines()
+            .filter(|line| {
+                let mut parts = line.splitn(2, ' ');
+                let path = parts.next().unwrap_or("");
+                let attr = parts.next().map(str::trim).unwrap_or("");
+                !(attr == attr_value && remove.contains(path))
+            })
+            .flat_map(|line| [line, "\n"])
+            .collect();
+
+        if filtered != existing {
+            std::fs::write(&gitattributes, filtered.as_bytes())?;
+        }
+
+        Ok(())
     }
 
     fn sync_attributes(&self, _entry: &VendorEntry) -> Result<(), Error> {
