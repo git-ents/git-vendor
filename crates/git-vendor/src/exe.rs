@@ -218,8 +218,4 @@ impl VendorWorktree for gix::Repository {
 
         Ok(())
     }
-
-    fn sync_attributes(&self, _entry: &VendorEntry) -> Result<(), Error> {
-        todo!()
-    }
 }

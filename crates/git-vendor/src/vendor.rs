@@ -634,8 +634,4 @@ pub trait VendorWorktree {
     /// Remove the given paths from the vendor's content filter, deleting their
     /// `vendor=<name>` entries from the working-copy `.gitattributes`.
     fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error>;
-
-    /// Rewrite the working-copy `.gitattributes` so its `vendor=<name>` entries
-    /// match the vendor's file set after a merge.
-    fn sync_attributes(&self, entry: &VendorEntry) -> Result<(), Error>;
 }
