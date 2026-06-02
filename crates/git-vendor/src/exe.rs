@@ -150,22 +150,22 @@ impl VendorWorktree for gix::Repository {
         let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
         let gitattributes = workdir.join(".gitattributes");
 
-        let existing = if gitattributes.exists() {
-            std::fs::read_to_string(&gitattributes)?
+        let existing: Vec<u8> = if gitattributes.exists() {
+            std::fs::read(&gitattributes)?
         } else {
-            String::new()
+            Vec::new()
         };
 
         let attr_value = format!("vendor={}", entry.name.as_str());
+        let attr_bytes = attr_value.as_bytes();
 
         let already_tracked: std::collections::HashSet<&[u8]> = existing
             .lines()
             .filter_map(|line| {
-                let mut parts = line.splitn(2, ' ');
-                let path = parts.next()?;
-                let attr = parts.next()?.trim();
-                if attr == attr_value {
-                    Some(path.as_bytes())
+                let i = line.iter().position(|&b| b == b' ')?;
+                let attr = line[i + 1..].trim();
+                if attr == attr_bytes {
+                    Some(&line[..i])
                 } else {
                     None
                 }
@@ -173,20 +173,20 @@ impl VendorWorktree for gix::Repository {
             .collect();
 
         let mut out = existing.clone();
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
+        if !out.is_empty() && out.last() != Some(&b'\n') {
+            out.push(b'\n');
         }
         for path in paths {
             if !already_tracked.contains(path.as_bytes()) {
-                out.push_str(&path.to_str_lossy());
-                out.push(' ');
-                out.push_str(&attr_value);
-                out.push('\n');
+                out.extend_from_slice(path.as_bytes());
+                out.push(b' ');
+                out.extend_from_slice(attr_bytes);
+                out.push(b'\n');
             }
         }
 
         if out != existing {
-            std::fs::write(&gitattributes, out.as_bytes())?;
+            std::fs::write(&gitattributes, &out)?;
         }
 
         Ok(())
@@ -200,24 +200,28 @@ impl VendorWorktree for gix::Repository {
             return Ok(());
         }
 
-        let existing = std::fs::read_to_string(&gitattributes)?;
+        let existing: Vec<u8> = std::fs::read(&gitattributes)?;
         let attr_value = format!("vendor={}", entry.name.as_str());
+        let attr_bytes = attr_value.as_bytes();
 
         let remove: std::collections::HashSet<&[u8]> = paths.iter().map(|b| b.as_bytes()).collect();
 
-        let filtered: String = existing
-            .lines()
-            .filter(|line| {
-                let mut parts = line.splitn(2, ' ');
-                let path = parts.next().unwrap_or("").as_bytes();
-                let attr = parts.next().map(str::trim).unwrap_or("");
-                !(attr == attr_value && remove.contains(path))
-            })
-            .flat_map(|line| [line, "\n"])
-            .collect();
+        let mut filtered: Vec<u8> = Vec::with_capacity(existing.len());
+        for line in existing.lines() {
+            let keep = if let Some(i) = line.iter().position(|&b| b == b' ') {
+                let attr = line[i + 1..].trim();
+                !(attr == attr_bytes && remove.contains(&line[..i]))
+            } else {
+                true
+            };
+            if keep {
+                filtered.extend_from_slice(line);
+                filtered.push(b'\n');
+            }
+        }
 
         if filtered != existing {
-            std::fs::write(&gitattributes, filtered.as_bytes())?;
+            std::fs::write(&gitattributes, &filtered)?;
         }
 
         Ok(())
