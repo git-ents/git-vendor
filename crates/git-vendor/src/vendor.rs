@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gix::bstr::ByteSlice as _;
+use gix::bstr::{BStr, ByteSlice as _};
 
 use crate::Error;
 
@@ -629,9 +629,9 @@ pub trait VendorWorktree {
     /// This authors local-side membership (read back by
     /// [`VendorRepository::vendor_paths`](crate::VendorRepository::vendor_paths));
     /// it is independent of the upstream pattern filter.
-    fn track_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error>;
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
 
     /// Remove the given paths from the vendor's content filter, deleting their
     /// `vendor=<name>` entries from the working-copy `.gitattributes`.
-    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error>;
+    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
 }

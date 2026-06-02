@@ -4,6 +4,7 @@
 //! `.gitattributes` for each path that matches.
 
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorWorktree as _};
+use gix::bstr::ByteSlice as _;
 
 use crate::support::{git, init, write};
 
@@ -56,7 +57,7 @@ fn removes_attribute_line_for_given_path() {
     let workdir = b.repo.workdir().unwrap().to_owned();
 
     b.repo
-        .untrack_vendor(&entry(), &["vendor/a.txt"])
+        .untrack_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .expect("untrack_vendor");
 
     let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
@@ -77,7 +78,7 @@ fn preserves_unrelated_lines() {
     let workdir = b.repo.workdir().unwrap().to_owned();
 
     b.repo
-        .untrack_vendor(&entry(), &["vendor/a.txt"])
+        .untrack_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .expect("untrack_vendor");
 
     let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
@@ -98,7 +99,7 @@ fn idempotent_path_not_present_is_noop() {
     let workdir = b.repo.workdir().unwrap().to_owned();
 
     b.repo
-        .untrack_vendor(&entry(), &["vendor/missing.txt"])
+        .untrack_vendor(&entry(), &[b"vendor/missing.txt".as_bstr()])
         .expect("untrack_vendor");
 
     let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
@@ -114,7 +115,7 @@ fn no_gitattributes_is_noop() {
     assert!(!attrs_path.exists(), "precondition: no .gitattributes");
 
     b.repo
-        .untrack_vendor(&entry(), &["vendor/a.txt"])
+        .untrack_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .expect("untrack_vendor");
 
     assert!(!attrs_path.exists(), ".gitattributes must not be created");
@@ -127,7 +128,7 @@ fn bare_repo_returns_no_workdir_error() {
     git(&["init", "--bare", "-b", "main"], dir.path());
     let repo = gix::open(dir.path()).unwrap();
     let err = repo
-        .untrack_vendor(&entry(), &["vendor/a.txt"])
+        .untrack_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .unwrap_err();
     assert!(matches!(err, git_vendor::Error::NoWorkdir), "{err:?}");
 }

@@ -4,6 +4,7 @@
 //! `.gitattributes` for each path not already attributed to this vendor.
 
 use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorWorktree as _};
+use gix::bstr::ByteSlice as _;
 
 use crate::support::{git, init, write};
 
@@ -56,7 +57,10 @@ fn adds_attribute_lines_for_new_paths() {
     let workdir = b.repo.workdir().unwrap().to_owned();
 
     b.repo
-        .track_vendor(&entry(), &["vendor/a.txt", "vendor/b.txt"])
+        .track_vendor(
+            &entry(),
+            &[b"vendor/a.txt".as_bstr(), b"vendor/b.txt".as_bstr()],
+        )
         .expect("track_vendor");
 
     let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
@@ -77,10 +81,10 @@ fn idempotent_does_not_duplicate_lines() {
     let workdir = b.repo.workdir().unwrap().to_owned();
 
     b.repo
-        .track_vendor(&entry(), &["vendor/a.txt"])
+        .track_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .expect("first call");
     b.repo
-        .track_vendor(&entry(), &["vendor/a.txt"])
+        .track_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .expect("second call");
 
     let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
@@ -100,7 +104,7 @@ fn creates_gitattributes_when_absent() {
     assert!(!attrs_path.exists(), "precondition: no .gitattributes");
 
     b.repo
-        .track_vendor(&entry(), &["vendor/new.txt"])
+        .track_vendor(&entry(), &[b"vendor/new.txt".as_bstr()])
         .expect("track_vendor");
 
     assert!(attrs_path.exists(), ".gitattributes must be created");
@@ -115,7 +119,7 @@ fn preserves_unrelated_lines() {
     let workdir = b.repo.workdir().unwrap().to_owned();
 
     b.repo
-        .track_vendor(&entry(), &["vendor/a.txt"])
+        .track_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .expect("track_vendor");
 
     let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
@@ -135,6 +139,8 @@ fn bare_repo_returns_no_workdir_error() {
     let dir = tempfile::tempdir().unwrap();
     git(&["init", "--bare", "-b", "main"], dir.path());
     let repo = gix::open(dir.path()).unwrap();
-    let err = repo.track_vendor(&entry(), &["vendor/a.txt"]).unwrap_err();
+    let err = repo
+        .track_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
+        .unwrap_err();
     assert!(matches!(err, git_vendor::Error::NoWorkdir), "{err:?}");
 }

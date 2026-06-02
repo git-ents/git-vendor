@@ -6,6 +6,8 @@
 //! of the one working copy and its ambient `HEAD`/index state, kept distinct
 //! from the pure object-database operations.
 
+use gix::bstr::{BStr, ByteSlice as _};
+
 use crate::{Error, VendorEntry, VendorMerge, VendorRepository, VendorWorktree};
 
 impl VendorWorktree for gix::Repository {
@@ -144,7 +146,7 @@ impl VendorWorktree for gix::Repository {
         Ok(())
     }
 
-    fn track_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error> {
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error> {
         let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
         let gitattributes = workdir.join(".gitattributes");
 
@@ -156,25 +158,27 @@ impl VendorWorktree for gix::Repository {
 
         let attr_value = format!("vendor={}", entry.name.as_str());
 
-        // Collect lines already attributed to this vendor for idempotency.
-        let already_tracked: std::collections::HashSet<&str> = existing
+        let already_tracked: std::collections::HashSet<&[u8]> = existing
             .lines()
             .filter_map(|line| {
                 let mut parts = line.splitn(2, ' ');
                 let path = parts.next()?;
                 let attr = parts.next()?.trim();
-                if attr == attr_value { Some(path) } else { None }
+                if attr == attr_value {
+                    Some(path.as_bytes())
+                } else {
+                    None
+                }
             })
             .collect();
 
         let mut out = existing.clone();
-        // Ensure existing content ends with a newline before appending.
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
         for path in paths {
-            if !already_tracked.contains(path) {
-                out.push_str(path);
+            if !already_tracked.contains(path.as_bytes()) {
+                out.push_str(&path.to_str_lossy());
                 out.push(' ');
                 out.push_str(&attr_value);
                 out.push('\n');
@@ -188,7 +192,7 @@ impl VendorWorktree for gix::Repository {
         Ok(())
     }
 
-    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&str]) -> Result<(), Error> {
+    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error> {
         let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
         let gitattributes = workdir.join(".gitattributes");
 
@@ -199,13 +203,13 @@ impl VendorWorktree for gix::Repository {
         let existing = std::fs::read_to_string(&gitattributes)?;
         let attr_value = format!("vendor={}", entry.name.as_str());
 
-        let remove: std::collections::HashSet<&str> = paths.iter().copied().collect();
+        let remove: std::collections::HashSet<&[u8]> = paths.iter().map(|b| b.as_bytes()).collect();
 
         let filtered: String = existing
             .lines()
             .filter(|line| {
                 let mut parts = line.splitn(2, ' ');
-                let path = parts.next().unwrap_or("");
+                let path = parts.next().unwrap_or("").as_bytes();
                 let attr = parts.next().map(str::trim).unwrap_or("");
                 !(attr == attr_value && remove.contains(path))
             })
