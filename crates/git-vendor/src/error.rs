@@ -15,6 +15,8 @@ pub enum Error {
     Fetch(String),
     #[error("merge conflict: {0}")]
     Conflict(String),
+    #[error("path requires quoting in .gitattributes: {0}")]
+    InvalidPath(String),
     #[error(transparent)]
     Gix(Box<dyn std::error::Error + Send + Sync + 'static>),
 }

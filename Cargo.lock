@@ -513,6 +513,7 @@ dependencies = [
  "git-set-attr",
  "gix",
  "gix-glob",
+ "gix-quote",
  "proptest",
  "rstest",
  "tempfile",

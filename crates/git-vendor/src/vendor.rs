@@ -601,7 +601,14 @@ pub trait VendorWorktree {
     ///
     /// Only paths owned by this vendor are written; unrelated files are left
     /// untouched.
-    fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error>;
+    /// Returns the full overlaid tree OID (the result of splicing `tree` into
+    /// the parent commit's tree), needed by callers that want to mint a commit
+    /// from the same tree without re-running the overlay.
+    fn checkout_vendor(
+        &self,
+        entry: &VendorEntry,
+        tree: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error>;
 
     /// Project a conflicted merge onto the working copy for manual resolution.
     ///
@@ -624,7 +631,8 @@ pub trait VendorWorktree {
     ) -> Result<(), Error>;
 
     /// Add the given paths to the vendor's local content filter by writing
-    /// `vendor=<name>` entries into the working-copy `.gitattributes`.
+    /// `vendor=<name>` entries into the working-copy `.gitattributes` and
+    /// staging the updated file into the index.
     ///
     /// This authors local-side membership (read back by
     /// [`VendorRepository::vendor_paths`](crate::VendorRepository::vendor_paths));
@@ -632,6 +640,19 @@ pub trait VendorWorktree {
     fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
 
     /// Remove the given paths from the vendor's content filter, deleting their
-    /// `vendor=<name>` entries from the working-copy `.gitattributes`.
+    /// `vendor=<name>` entries from the working-copy `.gitattributes` and
+    /// staging the updated file into the index.
     fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
+
+    /// Stage the merge result for a subsequent `git commit`.
+    ///
+    /// Writes `MERGE_HEAD` + `MERGE_MSG` (merge mode) or `SQUASH_MSG` (squash
+    /// mode) so that the user's own `git commit` produces the right commit
+    /// shape and has the default message pre-filled.
+    fn prepare_merge(
+        &self,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
+        message: &str,
+    ) -> Result<(), Error>;
 }

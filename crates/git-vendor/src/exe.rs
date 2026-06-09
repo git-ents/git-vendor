@@ -8,11 +8,15 @@
 
 use gix::bstr::{BStr, ByteSlice as _};
 
-use crate::{Error, VendorEntry, VendorMerge, VendorRepository, VendorWorktree};
+use crate::{Error, VendorEntry, VendorMerge, VendorMode, VendorRepository, VendorWorktree};
 
 impl VendorWorktree for gix::Repository {
-    fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error> {
-        // SAFETY
+    fn checkout_vendor(
+        &self,
+        entry: &VendorEntry,
+        tree: gix::ObjectId,
+    ) -> Result<gix::ObjectId, Error> {
+        // IMPORTANT
         // This is the trust boundary where upstream content (carried verbatim
         // through `upstream_tree`, including symlink and gitlink modes,
         // mirroring git-subtree/submodule) reaches the working copy. Like
@@ -94,7 +98,7 @@ impl VendorWorktree for gix::Repository {
             .write(gix::index::write::Options::default())
             .map_err(|e| Error::Gix(Box::new(e)))?;
 
-        Ok(())
+        Ok(full_tree)
     }
 
     fn checkout_vendor_conflicted(
@@ -159,13 +163,16 @@ impl VendorWorktree for gix::Repository {
         let attr_value = format!("vendor={}", entry.name.as_str());
         let attr_bytes = attr_value.as_bytes();
 
-        let already_tracked: std::collections::HashSet<&[u8]> = existing
+        for path in paths {
+            check_attr_pattern(path.as_bytes())?;
+        }
+
+        let already_tracked: std::collections::HashSet<Vec<u8>> = existing
             .lines()
             .filter_map(|line| {
-                let i = line.iter().position(|&b| b == b' ')?;
-                let attr = line[i + 1..].trim();
+                let (pattern, attr) = split_attr_line(line)?;
                 if attr == attr_bytes {
-                    Some(&line[..i])
+                    Some(pattern.into_owned())
                 } else {
                     None
                 }
@@ -189,6 +196,7 @@ impl VendorWorktree for gix::Repository {
             std::fs::write(&gitattributes, &out)?;
         }
 
+        stage_gitattributes(self, &out)?;
         Ok(())
     }
 
@@ -208,11 +216,9 @@ impl VendorWorktree for gix::Repository {
 
         let mut filtered: Vec<u8> = Vec::with_capacity(existing.len());
         for line in existing.lines() {
-            let keep = if let Some(i) = line.iter().position(|&b| b == b' ') {
-                let attr = line[i + 1..].trim();
-                !(attr == attr_bytes && remove.contains(&line[..i]))
-            } else {
-                true
+            let keep = match split_attr_line(line) {
+                Some((pattern, attr)) => !(attr == attr_bytes && remove.contains(pattern.as_ref())),
+                None => true,
             };
             if keep {
                 filtered.extend_from_slice(line);
@@ -224,6 +230,102 @@ impl VendorWorktree for gix::Repository {
             std::fs::write(&gitattributes, &filtered)?;
         }
 
+        stage_gitattributes(self, &filtered)?;
         Ok(())
     }
+
+    fn prepare_merge(
+        &self,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
+        message: &str,
+    ) -> Result<(), Error> {
+        let git_dir = self.git_dir();
+        if entry.mode == VendorMode::Squash {
+            std::fs::write(git_dir.join("SQUASH_MSG"), message.as_bytes())?;
+        } else {
+            std::fs::write(
+                git_dir.join("MERGE_HEAD"),
+                format!("{}\n", merge.upstream_commit),
+            )?;
+            std::fs::write(git_dir.join("MERGE_MSG"), message.as_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Return `Err` if `path` contains characters that require C-style quoting in
+/// `.gitattributes` (space, tab, `#`, `"`, `\`, or control characters).
+/// Git source paths from tree objects never contain these in practice.
+fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
+    if path
+        .iter()
+        .any(|&b| matches!(b, b' ' | b'\t' | b'#' | b'"' | b'\\' | 0..=31 | 127))
+    {
+        return Err(Error::InvalidPath(
+            String::from_utf8_lossy(path).into_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Parse one `.gitattributes` line into `(unquoted_pattern, trimmed_attrs)`.
+///
+/// Returns `None` for blank lines, comment lines, or lines with no attribute
+/// separator.  Handles both plain and C-style-quoted patterns using
+/// [`gix_quote::ansi_c::undo`].
+fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
+    if line.starts_with(b"\"") {
+        let (pattern, consumed) = gix_quote::ansi_c::undo(line.as_bstr()).ok()?;
+        let rest = line.get(consumed..)?;
+        if rest.first().is_some_and(|&b| b == b' ' || b == b'\t') {
+            let owned: Vec<u8> = pattern.as_ref().to_vec();
+            Some((std::borrow::Cow::Owned(owned), rest[1..].trim()))
+        } else {
+            None
+        }
+    } else {
+        let pos = line.iter().position(|&b| b == b' ' || b == b'\t')?;
+        Some((
+            std::borrow::Cow::Borrowed(&line[..pos]),
+            line[pos + 1..].trim(),
+        ))
+    }
+}
+
+#[cfg(test)]
+#[path = "exe_tests.rs"]
+mod tests;
+
+/// Write `content` as a blob into the object database and upsert the
+/// `.gitattributes` index entry to point at it.
+///
+/// This exists because [`VendorWorktree::track_vendor`] and
+/// [`VendorWorktree::untrack_vendor`] write `.gitattributes` as a working-copy
+/// side effect rather than folding it into the vendor tree before
+/// `index_from_tree` runs. Ideally those methods would return a blob OID so
+/// the caller could include `.gitattributes` in `full_tree` like any other
+/// file, making this function unnecessary.
+fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<(), Error> {
+    let blob_oid = repo
+        .write_object(gix::objs::BlobRef { data: content })?
+        .detach();
+
+    let mut index = repo.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
+    index.remove_entries(|_, path, _| path == b".gitattributes".as_bstr());
+    index.dangerously_push_entry(
+        gix::index::entry::Stat::default(),
+        blob_oid,
+        gix::index::entry::Flags::empty(),
+        gix::index::entry::Mode::FILE,
+        b".gitattributes".as_bstr(),
+    );
+    index.sort_entries();
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+
+    Ok(())
 }

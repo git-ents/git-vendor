@@ -28,6 +28,7 @@ git-set-attr = { version = "0.1.2", path = "../git-set-attr" }
 tempfile.workspace = true
 thiserror.workspace = true
 gix-glob.workspace = true
+gix-quote.workspace = true
 
 [dev-dependencies]
 proptest = "1.5.0"
