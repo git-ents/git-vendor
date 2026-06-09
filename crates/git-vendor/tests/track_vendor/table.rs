@@ -133,6 +133,20 @@ fn preserves_unrelated_lines() {
     );
 }
 
+/// A path containing a space is rejected with `Error::InvalidPath`.
+#[test]
+fn path_with_space_returns_invalid_path_error() {
+    let b = build_without_attributes();
+    let err = b
+        .repo
+        .track_vendor(&entry(), &[b"vendor/a b.txt".as_bstr()])
+        .unwrap_err();
+    assert!(
+        matches!(err, git_vendor::Error::InvalidPath(_)),
+        "expected InvalidPath, got {err:?}",
+    );
+}
+
 /// A bare repo returns `Error::NoWorkdir`.
 #[test]
 fn bare_repo_returns_no_workdir_error() {
