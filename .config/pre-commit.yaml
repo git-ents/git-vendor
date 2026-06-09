@@ -35,6 +35,6 @@ repos:
       - id: clippy
         name: cargo clippy
         language: system
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: cargo clippy --config .config/clippy.toml --all-targets --all-features -- -D warnings
         types: [rust]
         pass_filenames: false
