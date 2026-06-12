@@ -26,15 +26,20 @@ fn run(cli: cli::Cli) -> Result<()> {
             url,
             name,
             ref_name,
+            prefix,
             patterns,
             squash,
+            dry_run,
             message,
-        } => cmd_add(name, url, ref_name, patterns, squash, message),
+        } => cmd_add(
+            name, url, ref_name, prefix, patterns, squash, dry_run, message,
+        ),
         cli::Command::Update {
             name,
             message,
             force,
-        } => cmd_update(name, message, force),
+            dry_run,
+        } => cmd_update(name, message, force, dry_run),
         cli::Command::Status { name, fetch } => cmd_status(name, fetch),
         cli::Command::Remove { name, keep_files } => cmd_remove(name, keep_files),
         cli::Command::List => cmd_list(),
@@ -288,12 +293,15 @@ fn name_from_url(url: &str) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_add(
     name: Option<String>,
     url: String,
     ref_name: Option<String>,
+    prefix: Option<String>,
     patterns: Vec<String>,
     squash: bool,
+    dry_run: bool,
     message: Option<String>,
 ) -> Result<()> {
     let repo = discover()?;
@@ -312,6 +320,12 @@ fn cmd_add(
     } else {
         VendorMode::default()
     };
+    let patterns: Vec<String> = if patterns.is_empty() {
+        let dest = prefix.unwrap_or_else(|| format!("vendor/{name}/"));
+        vec![format!("**:{dest}")]
+    } else {
+        patterns
+    };
     let mut entry = VendorEntry {
         name: vendor_name,
         url,
@@ -324,6 +338,11 @@ fn cmd_add(
     // Fetch before touching config — a failed fetch leaves no side effects.
     eprintln!("Fetching {name}…");
     let upstream = repo.fetch_vendor(&entry)?;
+
+    if dry_run {
+        eprintln!("Would add vendor {name} at {upstream}.");
+        return Ok(());
+    }
 
     let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
 
@@ -402,7 +421,12 @@ fn cmd_add(
     Ok(())
 }
 
-fn cmd_update(name: Option<String>, message: Option<String>, force: bool) -> Result<()> {
+fn cmd_update(
+    name: Option<String>,
+    message: Option<String>,
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
     let repo = discover()?;
     let cfg_path = config_path(&repo)?;
     let mut config = load_config(&cfg_path)?;
@@ -444,6 +468,11 @@ fn cmd_update(name: Option<String>, message: Option<String>, force: bool) -> Res
                 continue;
             }
             _ => {}
+        }
+
+        if dry_run {
+            eprintln!("Would update {n} to {upstream}.");
+            continue;
         }
 
         let msg = message

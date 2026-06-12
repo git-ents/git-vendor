@@ -26,8 +26,13 @@ pub enum Command {
         name: Option<String>,
 
         /// Branch, tag, or SHA to track on the upstream (defaults to `HEAD`).
-        #[arg(long, value_name = "REF")]
+        #[arg(long = "ref", value_name = "REF")]
         ref_name: Option<String>,
+
+        /// Destination directory for vendored files (defaults to `vendor/<name>/`).
+        /// Ignored when `--pattern` is also given.
+        #[arg(long, value_name = "DIR")]
+        prefix: Option<String>,
 
         /// File pattern used to filter the upstream vendor content with optional
         /// remapping into the working copy, e.g. `src/**:vendor/lib/`. May be
@@ -39,6 +44,10 @@ pub enum Command {
         /// full merge.
         #[arg(long)]
         squash: bool,
+
+        /// Show what would be fetched and merged without making any changes.
+        #[arg(long)]
+        dry_run: bool,
 
         /// Commit message (defaults to `vendor: add <name>`).
         #[arg(long, short = 'm', value_name = "MSG")]
@@ -60,6 +69,10 @@ pub enum Command {
         /// history). Without this flag, a force-push is reported as an error.
         #[arg(long)]
         force: bool,
+
+        /// Show what would be fetched and merged without making any changes.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Show synchronization status for one or all vendors.
@@ -73,6 +86,7 @@ pub enum Command {
     },
 
     /// Remove a vendor dependency and its files from the working tree.
+    #[command(visible_alias = "rm")]
     Remove {
         /// Vendor name to remove.
         name: String,
@@ -84,5 +98,6 @@ pub enum Command {
     },
 
     /// List all configured vendor dependencies.
+    #[command(visible_alias = "ls")]
     List,
 }
