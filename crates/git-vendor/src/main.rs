@@ -60,8 +60,11 @@ fn load_config(path: &Path) -> Result<VendorConfig> {
     }
 }
 
-fn save_config(config: &VendorConfig, path: &Path) -> Result<()> {
-    Ok(std::fs::write(path, config.to_string())?)
+/// Write `config` to `path` and return the serialized bytes for blob staging.
+fn save_config(config: &VendorConfig, path: &Path) -> Result<String> {
+    let s = config.to_string();
+    std::fs::write(path, &s)?;
+    Ok(s)
 }
 
 fn require_entry(config: &VendorConfig, name: &str) -> Result<VendorEntry> {
@@ -143,8 +146,9 @@ fn reconcile_tracked_paths(
     Ok(())
 }
 
-/// Read the staged `.gitattributes` blob OID from the index.
-fn staged_attrs_blob(repo: &gix::Repository) -> Result<gix::ObjectId> {
+/// Write `content` as a blob, upsert the `.gitattributes` index entry, and
+/// return the blob OID so callers can include it in a commit tree.
+fn stage_attrs_blob(repo: &gix::Repository) -> Result<gix::ObjectId> {
     use gix::bstr::ByteSlice as _;
     let index = repo.open_index().map_err(|e| format!("{e}"))?;
     index
@@ -155,12 +159,37 @@ fn staged_attrs_blob(repo: &gix::Repository) -> Result<gix::ObjectId> {
         .ok_or_else(|| "no .gitattributes in index after tracking".into())
 }
 
-/// Upsert the staged `.gitattributes` blob into `full_tree`, returning the
-/// corrected full tree that includes updated vendor membership.
+/// Write `content` as a blob, upsert the `.gitvendors` index entry, and return
+/// the blob OID so callers can include it in a commit tree.
+fn stage_gitvendors(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId> {
+    use gix::bstr::ByteSlice as _;
+    let blob_oid = repo
+        .write_object(gix::objs::BlobRef { data: content })
+        .map_err(|e| format!("{e}"))?
+        .detach();
+    let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
+    index.remove_entries(|_, path, _| path == b".gitvendors".as_bstr());
+    index.dangerously_push_entry(
+        gix::index::entry::Stat::default(),
+        blob_oid,
+        gix::index::entry::Flags::empty(),
+        gix::index::entry::Mode::FILE,
+        b".gitvendors".as_bstr(),
+    );
+    index.sort_entries();
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|e| format!("{e}"))?;
+    Ok(blob_oid)
+}
+
+/// Upsert `.gitattributes` and `.gitvendors` blobs into `full_tree`, returning
+/// the corrected tree OID that carries both files.
 fn final_tree(
     repo: &gix::Repository,
     full_tree: gix::ObjectId,
     attrs_blob: gix::ObjectId,
+    vendors_blob: gix::ObjectId,
 ) -> Result<gix::ObjectId> {
     use gix::bstr::ByteSlice as _;
     let mut editor = repo
@@ -174,6 +203,13 @@ fn final_tree(
             b".gitattributes".as_bstr(),
             gix::objs::tree::EntryKind::Blob,
             attrs_blob,
+        )
+        .map_err(|e| format!("{e}"))?;
+    editor
+        .upsert(
+            b".gitvendors".as_bstr(),
+            gix::objs::tree::EntryKind::Blob,
+            vendors_blob,
         )
         .map_err(|e| format!("{e}"))?;
     Ok(editor.write().map_err(|e| format!("{e}"))?.detach())
@@ -277,9 +313,16 @@ fn cmd_add(
 
             if merge.has_conflicts() {
                 repo.checkout_vendor_conflicted(&entry, &merge)?;
+                // Record the config entry and set up MERGE_HEAD so the user's
+                // `git commit` after resolution produces a proper merge commit.
+                entry.base = Some(merge.upstream_commit);
+                config.insert(&entry)?;
+                let config_str = save_config(&config, &cfg_path)?;
+                stage_gitvendors(&repo, config_str.as_bytes())?;
+                repo.prepare_merge(&entry, &merge, &msg)?;
                 let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
                 eprintln!("Conflict in: {}", paths.join(", "));
-                eprintln!("Resolve conflicts, then commit.");
+                eprintln!("Resolve conflicts, then run `git commit`.");
                 std::process::exit(1);
             }
 
@@ -289,17 +332,13 @@ fn cmd_add(
 
             entry.base = Some(merge.upstream_commit);
             config.insert(&entry)?;
-            save_config(&config, &cfg_path)?;
+            let config_str = save_config(&config, &cfg_path)?;
 
-            if message.is_some() {
-                let attrs_blob = staged_attrs_blob(&repo)?;
-                let tree = final_tree(&repo, full_tree, attrs_blob)?;
-                commit_and_advance(&repo, &entry, &merge, tree, ours, &msg)?;
-                eprintln!("Added vendor {name}.");
-            } else {
-                repo.prepare_merge(&entry, &merge, &msg)?;
-                eprintln!("Added vendor {name}. Run `git commit` to record the merge.");
-            }
+            let attrs_blob = stage_attrs_blob(&repo)?;
+            let vendors_blob = stage_gitvendors(&repo, config_str.as_bytes())?;
+            let tree = final_tree(&repo, full_tree, attrs_blob, vendors_blob)?;
+            commit_and_advance(&repo, &entry, &merge, tree, ours, &msg)?;
+            eprintln!("Added vendor {name}.");
         }
         None => {
             // Unborn repository: make the initial commit directly (no merge).
@@ -311,10 +350,11 @@ fn cmd_add(
 
             entry.base = Some(upstream);
             config.insert(&entry)?;
-            save_config(&config, &cfg_path)?;
+            let config_str = save_config(&config, &cfg_path)?;
 
-            let attrs_blob = staged_attrs_blob(&repo)?;
-            let commit_tree = final_tree(&repo, full_tree, attrs_blob)?;
+            let attrs_blob = stage_attrs_blob(&repo)?;
+            let vendors_blob = stage_gitvendors(&repo, config_str.as_bytes())?;
+            let commit_tree = final_tree(&repo, full_tree, attrs_blob, vendors_blob)?;
 
             let author = author_sig(&repo)?;
             let committer = committer_sig(&repo)?;
@@ -393,9 +433,14 @@ fn cmd_update(name: Option<String>, message: Option<String>, force: bool) -> Res
 
         if merge.has_conflicts() {
             repo.checkout_vendor_conflicted(&entry, &merge)?;
+            entry.base = Some(merge.upstream_commit);
+            config.insert(&entry)?;
+            let config_str = save_config(&config, &cfg_path)?;
+            stage_gitvendors(&repo, config_str.as_bytes())?;
+            repo.prepare_merge(&entry, &merge, &msg)?;
             let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
             eprintln!("{n}: conflict in {}", paths.join(", "));
-            eprintln!("Resolve conflicts, then commit.");
+            eprintln!("Resolve conflicts, then run `git commit`.");
             std::process::exit(1);
         }
 
@@ -405,11 +450,12 @@ fn cmd_update(name: Option<String>, message: Option<String>, force: bool) -> Res
 
         entry.base = Some(merge.upstream_commit);
         config.insert(&entry)?;
-        save_config(&config, &cfg_path)?;
+        let config_str = save_config(&config, &cfg_path)?;
 
         if auto_commit {
-            let attrs_blob = staged_attrs_blob(&repo)?;
-            let tree = final_tree(&repo, full_tree, attrs_blob)?;
+            let attrs_blob = stage_attrs_blob(&repo)?;
+            let vendors_blob = stage_gitvendors(&repo, config_str.as_bytes())?;
+            let tree = final_tree(&repo, full_tree, attrs_blob, vendors_blob)?;
             commit_and_advance(&repo, &entry, &merge, tree, current_head, &msg)?;
             current_head = repo
                 .head_commit()
@@ -417,6 +463,7 @@ fn cmd_update(name: Option<String>, message: Option<String>, force: bool) -> Res
                 .map_err(|e| format!("HEAD after commit: {e}"))?;
             eprintln!("Updated {n}.");
         } else {
+            stage_gitvendors(&repo, config_str.as_bytes())?;
             repo.prepare_merge(&entry, &merge, &msg)?;
             eprintln!("Updated {n}. Run `git commit` to record the merge.");
         }
@@ -472,6 +519,7 @@ fn cmd_remove(name: String, keep_files: bool) -> Result<()> {
         let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
 
         if let Some(oid) = head_oid {
+            use gix::bstr::ByteSlice as _;
             let workdir = repo.workdir().ok_or("not a working-copy repository")?;
             let paths = repo.vendor_paths(&entry, oid)?;
             for p in &paths {
@@ -482,6 +530,18 @@ fn cmd_remove(name: String, keep_files: bool) -> Result<()> {
             }
             let path_refs: Vec<&gix::bstr::BStr> = paths.iter().map(|b| b.as_ref()).collect();
             repo.untrack_vendor(&entry, &path_refs)?;
+
+            // Remove the deleted vendor files from the index so `git commit`
+            // records the deletions rather than leaving them tracked.
+            let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
+            for p in &path_refs {
+                let pb = p.as_bytes();
+                index.remove_entries(|_, path, _| path == pb.as_bstr());
+            }
+            index.sort_entries();
+            index
+                .write(gix::index::write::Options::default())
+                .map_err(|e| format!("{e}"))?;
         }
     }
 

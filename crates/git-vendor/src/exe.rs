@@ -277,6 +277,9 @@ fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
 /// separator.  Handles both plain and C-style-quoted patterns using
 /// [`gix_quote::ansi_c::undo`].
 fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
+    if line.is_empty() || line[0] == b'#' {
+        return None;
+    }
     if line.starts_with(b"\"") {
         let (pattern, consumed) = gix_quote::ansi_c::undo(line.as_bstr()).ok()?;
         let rest = line.get(consumed..)?;
@@ -288,6 +291,9 @@ fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
         }
     } else {
         let pos = line.iter().position(|&b| b == b' ' || b == b'\t')?;
+        if pos == 0 {
+            return None; // leading whitespace — no valid pattern before the separator
+        }
         Some((
             std::borrow::Cow::Borrowed(&line[..pos]),
             line[pos + 1..].trim(),

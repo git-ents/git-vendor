@@ -35,6 +35,10 @@ fn split_line(#[case] line: &[u8], #[case] pattern: &[u8], #[case] attr: &[u8]) 
 #[rstest]
 #[case(b"vendor/a.txt")]
 #[case(b"")]
+#[case(b"# comment line")]
+#[case(b"# vendor=mylib")]
+#[case(b"  ")]
+#[case(b" vendor/a.txt attr")]
 fn split_no_attr_returns_none(#[case] line: &[u8]) {
     assert!(split_attr_line(line).is_none());
 }
