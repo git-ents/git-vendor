@@ -18,11 +18,12 @@ pub enum Command {
     /// mints a merge commit. Equivalent to `git subtree add` or a tracked
     /// `git submodule add` that copies files instead of linking a repo.
     Add {
-        /// Unique name for this vendor (used in `.gitvendors` and `.gitattributes`).
-        name: String,
-
         /// Remote URL of the upstream repository.
         url: String,
+
+        /// Unique name for this vendor (used in `.gitvendors` and `.gitattributes`).
+        /// Defaults to the last path component of the URL, stripped of `.git`.
+        name: Option<String>,
 
         /// Branch, tag, or SHA to track on the upstream (defaults to `HEAD`).
         #[arg(long, value_name = "REF")]

@@ -23,8 +23,8 @@ fn main() {
 fn run(cli: cli::Cli) -> Result<()> {
     match cli.command {
         cli::Command::Add {
-            name,
             url,
+            name,
             ref_name,
             patterns,
             squash,
@@ -270,8 +270,26 @@ fn commit_and_advance(
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
+/// Derive a vendor name from a URL by taking the last non-empty path component
+/// and stripping common suffixes (`.git`, `.bundle`).
+fn name_from_url(url: &str) -> Option<String> {
+    let stem = url
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .find(|s| !s.is_empty())?;
+    let stem = stem
+        .strip_suffix(".git")
+        .or_else(|| stem.strip_suffix(".bundle"))
+        .unwrap_or(stem);
+    if stem.is_empty() {
+        None
+    } else {
+        Some(stem.to_owned())
+    }
+}
+
 fn cmd_add(
-    name: String,
+    name: Option<String>,
     url: String,
     ref_name: Option<String>,
     patterns: Vec<String>,
@@ -282,6 +300,12 @@ fn cmd_add(
     let cfg_path = config_path(&repo)?;
     let mut config = load_config(&cfg_path)?;
 
+    let name = match name {
+        Some(n) => n,
+        None => name_from_url(&url).ok_or_else(|| {
+            format!("cannot derive a vendor name from URL {url:?}; pass a name explicitly")
+        })?,
+    };
     let vendor_name = VendorName::new(&name)?;
     let mode = if squash {
         VendorMode::Squash
