@@ -396,6 +396,11 @@ fn cmd_add(
 
             if merge.has_conflicts() {
                 repo.checkout_vendor_conflicted(&entry, &merge)?;
+                // Track the vendor paths now: the conflict markers, not the set
+                // of paths, are what the user resolves, so `.gitattributes` must
+                // record the mapping before they `git commit`.
+                let new_paths = tree_paths(&repo, merge.result_tree)?;
+                reconcile_tracked_paths(&repo, &entry, &[], &new_paths)?;
                 // Record the config entry and set up MERGE_HEAD so the user's
                 // `git commit` after resolution produces a proper merge commit.
                 entry.base = Some(merge.upstream_commit);
@@ -510,6 +515,8 @@ fn cmd_update(
 
         if merge.has_conflicts() {
             repo.checkout_vendor_conflicted(&entry, &merge)?;
+            let new_paths = tree_paths(&repo, merge.result_tree)?;
+            reconcile_tracked_paths(&repo, &entry, &old_paths, &new_paths)?;
             entry.base = Some(merge.upstream_commit);
             config.insert(&entry)?;
             let config_str = save_config(&config, &cfg_path)?;
