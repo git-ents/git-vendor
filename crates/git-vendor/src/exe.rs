@@ -273,14 +273,13 @@ impl Executor {
 
             let full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
             let new_paths = tree_paths(repo, merge.result_tree)?;
-            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
 
             entry.base = Some(merge.upstream_commit);
             config.insert(&entry)?;
             let config_str = save_config(&config, &cfg_path)?;
 
             if auto_commit {
-                let attrs_blob = staged_attrs_blob(repo)?;
                 let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
                 let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
                 commit_and_advance(repo, &entry, &merge, tree, current_head, &msg)?;
@@ -382,9 +381,7 @@ impl Executor {
 
             let full_tree = repo.checkout_vendor(&entry, new_tree)?;
             let new_paths = tree_paths(repo, new_tree)?;
-            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
-
-            let attrs_blob = staged_attrs_blob(repo)?;
+            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
             let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
             let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
 
@@ -643,10 +640,10 @@ fn reconcile_tracked_paths(
     entry: &VendorEntry,
     old_paths: &[gix::bstr::BString],
     new_paths: &[gix::bstr::BString],
-) -> Result<()> {
+) -> Result<gix::ObjectId> {
     use gix::bstr::BStr;
     let track: Vec<&BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
-    repo.track_vendor(entry, &track)?;
+    let attrs_oid = repo.track_vendor(entry, &track)?;
 
     let new_set: std::collections::HashSet<&[u8]> =
         new_paths.iter().map(|b| b.as_slice()).collect();
@@ -655,27 +652,12 @@ fn reconcile_tracked_paths(
         .filter(|b| !new_set.contains(b.as_slice()))
         .map(|b| b.as_ref())
         .collect();
-    if !removed.is_empty() {
-        repo.untrack_vendor(entry, &removed)?;
+    if !removed.is_empty()
+        && let Some(oid) = repo.untrack_vendor(entry, &removed)?
+    {
+        return Ok(oid);
     }
-    Ok(())
-}
-
-/// Return the OID of the `.gitattributes` blob already staged in the index by
-/// `track_vendor`, so callers can include it in a commit tree.
-///
-/// Unlike `stage_gitvendors`, this writes nothing: `track_vendor` stages
-/// `.gitattributes` as a working-copy side effect and this only reads the
-/// resulting index entry back.
-fn staged_attrs_blob(repo: &gix::Repository) -> Result<gix::ObjectId> {
-    use gix::bstr::ByteSlice as _;
-    let index = repo.open_index().map_err(|e| format!("{e}"))?;
-    index
-        .entries()
-        .iter()
-        .find(|e| e.path(&index) == b".gitattributes".as_bstr())
-        .map(|e| e.id)
-        .ok_or_else(|| "no .gitattributes in index after tracking".into())
+    Ok(attrs_oid)
 }
 
 /// Write `content` as a blob, upsert the `.gitvendors` index entry, and return

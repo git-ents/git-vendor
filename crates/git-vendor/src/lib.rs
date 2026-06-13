@@ -673,7 +673,7 @@ impl VendorWorktree for gix::Repository {
         Ok(())
     }
 
-    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error> {
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<gix::ObjectId, Error> {
         let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
         let gitattributes = workdir.join(".gitattributes");
 
@@ -719,16 +719,19 @@ impl VendorWorktree for gix::Repository {
             std::fs::write(&gitattributes, &out)?;
         }
 
-        stage_gitattributes(self, &out)?;
-        Ok(())
+        stage_gitattributes(self, &out)
     }
 
-    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error> {
+    fn untrack_vendor(
+        &self,
+        entry: &VendorEntry,
+        paths: &[&BStr],
+    ) -> Result<Option<gix::ObjectId>, Error> {
         let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
         let gitattributes = workdir.join(".gitattributes");
 
         if !gitattributes.exists() {
-            return Ok(());
+            return Ok(None);
         }
 
         let existing: Vec<u8> = std::fs::read(&gitattributes)?;
@@ -753,8 +756,7 @@ impl VendorWorktree for gix::Repository {
             std::fs::write(&gitattributes, &filtered)?;
         }
 
-        stage_gitattributes(self, &filtered)?;
-        Ok(())
+        Ok(Some(stage_gitattributes(self, &filtered)?))
     }
 
     fn prepare_merge(
@@ -824,16 +826,9 @@ fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
 #[path = "attr_tests.rs"]
 mod tests;
 
-/// Write `content` as a blob into the object database and upsert the
-/// `.gitattributes` index entry to point at it.
-///
-/// This exists because [`VendorWorktree::track_vendor`] and
-/// [`VendorWorktree::untrack_vendor`] write `.gitattributes` as a working-copy
-/// side effect rather than folding it into the vendor tree before
-/// `index_from_tree` runs. Ideally those methods would return a blob OID so
-/// the caller could include `.gitattributes` in `full_tree` like any other
-/// file, making this function unnecessary.
-fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<(), Error> {
+/// Write `content` as a blob into the object database, upsert the
+/// `.gitattributes` index entry to point at it, and return the blob OID.
+fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId, Error> {
     let blob_oid = repo
         .write_object(gix::objs::BlobRef { data: content })?
         .detach();
@@ -852,5 +847,5 @@ fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<(), Err
         .write(gix::index::write::Options::default())
         .map_err(|e| Error::Gix(Box::new(e)))?;
 
-    Ok(())
+    Ok(blob_oid)
 }

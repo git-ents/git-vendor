@@ -637,12 +637,16 @@ pub trait VendorWorktree {
     /// This authors local-side membership (read back by
     /// [`VendorRepository::vendor_paths`](crate::VendorRepository::vendor_paths));
     /// it is independent of the upstream pattern filter.
-    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<gix::ObjectId, Error>;
 
     /// Remove the given paths from the vendor's content filter, deleting their
     /// `vendor=<name>` entries from the working-copy `.gitattributes` and
     /// staging the updated file into the index.
-    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
+    fn untrack_vendor(
+        &self,
+        entry: &VendorEntry,
+        paths: &[&BStr],
+    ) -> Result<Option<gix::ObjectId>, Error>;
 
     /// Stage the merge result for a subsequent `git commit`.
     ///
