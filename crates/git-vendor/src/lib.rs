@@ -57,14 +57,7 @@ impl VendorRepository for gix::Repository {
             | gix::url::Scheme::Http
             | gix::url::Scheme::Ssh
             | gix::url::Scheme::Git => {}
-            gix::url::Scheme::File => {
-                if !self.is_bare() {
-                    return Err(Error::InvalidUrl(format!(
-                        "{}: refusing transport `{:?}`; local transports are not yet supported",
-                        entry.url, url.scheme
-                    )));
-                }
-            }
+            gix::url::Scheme::File => {}
             ref other => {
                 return Err(Error::InvalidUrl(format!(
                     "{}: refusing transport `{other:?}`; plug-in transports are not supported",
@@ -128,8 +121,35 @@ impl VendorRepository for gix::Repository {
             }
         }
 
-        let mut reference = self.find_reference(&entry.vendor_ref())?;
-        let id = reference.peel_to_id()?.detach();
+        // Read the upstream OID from the refmap rather than by re-reading the
+        // local vendor ref.  When the remote advertises HEAD as a symbolic ref
+        // (e.g. `HEAD → refs/heads/main`) and the local repo happens to have a
+        // branch of the same name, gix writes `refs/vendor/<name>` as a symref
+        // pointing to that local branch; `peel_to_id()` would then silently
+        // return the *local* HEAD instead of the upstream tip.  The refmap
+        // carries the actual upstream OID directly before any local ref
+        // resolution, so keying on it sidesteps the bug entirely.
+        // Upstream: https://github.com/GitoxideLabs/gitoxide/issues/2613
+        let vendor_ref = entry.vendor_ref();
+        let id = outcome
+            .ref_map
+            .mappings
+            .iter()
+            .find(|m| {
+                m.local
+                    .as_deref()
+                    .map(|l| l == vendor_ref.as_bytes())
+                    .unwrap_or(false)
+            })
+            .and_then(|m| m.remote.peeled_id())
+            .map(gix::oid::to_owned)
+            .ok_or_else(|| {
+                Error::Fetch(format!(
+                    "remote has no ref matching `{}` for vendor `{}`",
+                    entry.tracking_ref(),
+                    entry.name
+                ))
+            })?;
         Ok(id)
     }
 

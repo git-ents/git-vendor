@@ -254,11 +254,7 @@ fn fetch_errors_when_ref_missing() {
 /// and is unaffected; this test pins the non-bare case so the regression is
 /// hard to reintroduce once fixed.
 ///
-/// Marked `#[should_panic]` so CI passes while the upstream gix bug stands;
-/// when the bug is fixed this flips to a regular failure and the attribute
-/// is removed.
 #[test]
-#[should_panic]
 fn fetch_returns_upstream_tip_into_non_bare_local() {
     let upstream = tempfile::tempdir().unwrap();
     let local = tempfile::tempdir().unwrap();
