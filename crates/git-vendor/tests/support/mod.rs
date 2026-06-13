@@ -45,6 +45,19 @@ pub fn git_capture(args: &[&str], dir: &Path) -> Vec<u8> {
     output.stdout
 }
 
+/// Run the compiled `git-vendor` binary in `dir` with isolated config and
+/// return its captured [`Output`](std::process::Output) without asserting
+/// success, so tests can inspect both exit status and streams.
+pub fn vendor(args: &[&str], dir: &Path) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_git-vendor"))
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("git-vendor")
+}
+
 /// `git rev-parse <rev>` in `dir`, return the resolved OID.
 pub fn rev_parse(dir: &Path, rev: &str) -> gix::ObjectId {
     let out = git_capture(&["rev-parse", rev], dir);

@@ -742,7 +742,8 @@ fn cmd_remove(name: String, keep_files: bool) -> Result<()> {
     }
 
     config.remove(&name)?;
-    save_config(&config, &cfg_path)?;
+    let config_str = save_config(&config, &cfg_path)?;
+    stage_gitvendors(&repo, config_str.as_bytes())?;
     eprintln!("Removed vendor {name}.");
     Ok(())
 }
