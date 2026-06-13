@@ -356,7 +356,12 @@ fn cmd_add(
         VendorMode::default()
     };
     let patterns: Vec<String> = if patterns.is_empty() {
-        let dest = prefix.unwrap_or_else(|| format!("vendor/{name}/"));
+        let dest = prefix.map_or_else(
+            || format!("vendor/{name}/"),
+            |p| {
+                if p.ends_with('/') { p } else { format!("{p}/") }
+            },
+        );
         vec![format!("**:{dest}")]
     } else {
         patterns
@@ -404,7 +409,7 @@ fn cmd_add(
                 std::process::exit(1);
             }
 
-            let full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
+            let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
             let new_paths = tree_paths(&repo, merge.result_tree)?;
             reconcile_tracked_paths(&repo, &entry, &[], &new_paths)?;
 
@@ -412,16 +417,16 @@ fn cmd_add(
             config.insert(&entry)?;
             let config_str = save_config(&config, &cfg_path)?;
 
-            let attrs_blob = stage_attrs_blob(&repo)?;
-            let vendors_blob = stage_gitvendors(&repo, config_str.as_bytes())?;
-            let tree = final_tree(&repo, full_tree, attrs_blob, vendors_blob)?;
-            commit_and_advance(&repo, &entry, &merge, tree, ours, &msg)?;
-            eprintln!("Added vendor {name}.");
+            stage_attrs_blob(&repo)?;
+            stage_gitvendors(&repo, config_str.as_bytes())?;
+
+            repo.prepare_merge(&entry, &merge, &msg)?;
+            eprintln!("Staged; run `git commit` to complete.");
         }
         None => {
             // Unborn repository: make the initial commit directly (no merge).
             let tree = repo.upstream_tree(&entry, upstream)?;
-            let full_tree = repo.checkout_vendor(&entry, tree)?;
+            let _full_tree = repo.checkout_vendor(&entry, tree)?;
             let new_paths = tree_paths(&repo, tree)?;
             let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
             repo.track_vendor(&entry, &path_refs)?;
@@ -430,26 +435,10 @@ fn cmd_add(
             config.insert(&entry)?;
             let config_str = save_config(&config, &cfg_path)?;
 
-            let attrs_blob = stage_attrs_blob(&repo)?;
-            let vendors_blob = stage_gitvendors(&repo, config_str.as_bytes())?;
-            let commit_tree = final_tree(&repo, full_tree, attrs_blob, vendors_blob)?;
+            stage_attrs_blob(&repo)?;
+            stage_gitvendors(&repo, config_str.as_bytes())?;
 
-            let author = author_sig(&repo)?;
-            let committer = committer_sig(&repo)?;
-            let mut tbuf_a = gix::date::parse::TimeBuf::default();
-            let mut tbuf_c = gix::date::parse::TimeBuf::default();
-            let commit = gix::objs::Commit {
-                tree: commit_tree,
-                parents: Default::default(),
-                author: author.to_ref(&mut tbuf_a).into(),
-                committer: committer.to_ref(&mut tbuf_c).into(),
-                encoding: None,
-                message: msg.as_str().into(),
-                extra_headers: Vec::new(),
-            };
-            let new_commit = repo.write_object(&commit)?.detach();
-            advance_head(&repo, new_commit, &msg)?;
-            eprintln!("Added vendor {name}.");
+            eprintln!("Staged; run `git commit` to complete.");
         }
     }
 
