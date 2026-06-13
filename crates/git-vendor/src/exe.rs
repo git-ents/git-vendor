@@ -1,335 +1,802 @@
-//! Working-copy projection layer: the side-effecting half of vendoring.
-//!
-//! Where [`VendorRepository`](crate::VendorRepository) is a pure
-//! object-database algebra, every method here writes the index and working
-//! tree (including tracked files like `.gitattributes`). It is the sole owner
-//! of the one working copy and its ambient `HEAD`/index state, kept distinct
-//! from the pure object-database operations.
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
-use gix::bstr::{BStr, ByteSlice as _};
+use git_vendor::{
+    PatternMapping, VendorConfig, VendorEntry, VendorMode, VendorName, VendorRepository,
+    VendorStatus, VendorWorktree,
+};
 
-use crate::{Error, VendorEntry, VendorMerge, VendorMode, VendorRepository, VendorWorktree};
+use crate::cli;
 
-impl VendorWorktree for gix::Repository {
-    fn checkout_vendor(
-        &self,
-        entry: &VendorEntry,
-        tree: gix::ObjectId,
-    ) -> Result<gix::ObjectId, Error> {
-        // IMPORTANT
-        // This is the trust boundary where upstream content (carried verbatim
-        // through `upstream_tree`, including symlink and gitlink modes,
-        // mirroring git-subtree/submodule) reaches the working copy. Like
-        // core git's `verify_path`/checkout, projection MUST refuse to write
-        // through a symlinked leading path and reject `..`/absolute
-        // components — use gix-worktree's checked checkout, never naive
-        // `std::fs` writes. See the `upstream_tree` adversarial review (#5).
-        // NOTE
-        // Path-traversal safety (e.g. `../` components, symlinked leading
-        // paths) is delegated to gix and is not covered by automated tests.
-        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
+type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
-        let head_id = self.head_commit().ok().map(|c| c.id().detach());
+pub struct Io {
+    pub out: Box<dyn std::io::Write>,
+    pub err: Box<dyn std::io::Write>,
+}
 
-        let old_paths: std::collections::BTreeSet<gix::bstr::BString> = head_id
-            .and_then(|id| crate::resolve_vendor_paths(self, entry, id).ok())
-            .into_iter()
-            .flatten()
-            .collect();
-
-        let mut vendor_index = self.index_from_tree(&tree)?;
-
-        let new_paths: std::collections::BTreeSet<gix::bstr::BString> = vendor_index
-            .entries()
-            .iter()
-            .map(|e| e.path(&vendor_index).to_owned())
-            .collect();
-
-        let opts = self
-            .checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)
-            .map_err(|e| Error::Gix(Box::new(e)))?;
-        let progress = gix::progress::Discard;
-        gix::worktree::state::checkout(
-            &mut vendor_index,
-            workdir,
-            self.objects.clone().into_arc().map_err(Error::Io)?,
-            &progress,
-            &progress,
-            &gix::interrupt::IS_INTERRUPTED,
-            gix::worktree::state::checkout::Options {
-                overwrite_existing: true,
-                ..opts
-            },
-        )
-        .map_err(|e| Error::Gix(Box::new(e)))?;
-
-        for removed in old_paths.difference(&new_paths) {
-            let abs = workdir.join(gix::path::from_bstr(removed).as_ref());
-            if abs.symlink_metadata().is_ok() {
-                std::fs::remove_file(&abs)?;
-            }
+impl Io {
+    pub fn stdio() -> Self {
+        Io {
+            out: Box::new(std::io::stdout()),
+            err: Box::new(std::io::stderr()),
         }
-
-        // Overlay the vendor tree onto the full HEAD tree and rebuild the index
-        // from the result. An unborn HEAD has no base commit, so the vendor tree
-        // is itself the whole tree.
-        let full_tree = match head_id {
-            Some(id) => self.vendor_overlay(entry, id, tree)?,
-            None => tree,
-        };
-        let mut main_index = self.index_from_tree(&full_tree)?;
-        main_index.set_path(self.git_dir().join("index"));
-
-        // `index_from_tree` zeroes stat data; carry over the stats checkout just
-        // populated on the vendor entries so `git status` need not re-hash them.
-        let vendor_stats: std::collections::HashMap<gix::bstr::BString, gix::index::entry::Stat> =
-            vendor_index
-                .entries()
-                .iter()
-                .map(|e| (e.path(&vendor_index).to_owned(), e.stat))
-                .collect();
-        for (e, path) in main_index.entries_mut_with_paths() {
-            if let Some(stat) = vendor_stats.get(path) {
-                e.stat = *stat;
-            }
-        }
-
-        main_index
-            .write(gix::index::write::Options::default())
-            .map_err(|e| Error::Gix(Box::new(e)))?;
-
-        Ok(full_tree)
     }
+}
 
-    fn checkout_vendor_conflicted(
-        &self,
-        entry: &VendorEntry,
-        merge: &VendorMerge,
-    ) -> Result<(), Error> {
-        use gix::bstr::ByteSlice as _;
+#[derive(Debug)]
+pub struct ConflictExit;
 
-        // Write the result tree (with conflict markers) to the working copy.
-        self.checkout_vendor(entry, merge.result_tree)?;
-
-        // Reopen the index we just wrote so we can splice in unmerged stages.
-        let mut main_index = self.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
-        main_index.set_path(self.git_dir().join("index"));
-
-        for conflict in &merge.conflicts {
-            let path_bytes = gix::bstr::BString::from(conflict.path.as_bytes());
-            let path_bstr = path_bytes.as_bstr();
-
-            // Remove the stage-0 entry for this path.
-            main_index.remove_entries(|_, p, _| p == path_bstr);
-
-            // Insert stage 1/2/3 entries for each present stage.
-            for (stage_idx, stage_variant) in [
-                (0usize, gix::index::entry::Stage::Base),
-                (1usize, gix::index::entry::Stage::Ours),
-                (2usize, gix::index::entry::Stage::Theirs),
-            ] {
-                if let Some((tree_mode, oid)) = conflict.stages[stage_idx] {
-                    let mode = gix::index::entry::Mode::from(tree_mode);
-                    let flags = gix::index::entry::Flags::from_stage(stage_variant);
-                    main_index.dangerously_push_entry(
-                        gix::index::entry::Stat::default(),
-                        oid,
-                        flags,
-                        mode,
-                        path_bstr,
-                    );
-                }
-            }
-        }
-
-        main_index.sort_entries();
-        main_index
-            .write(gix::index::write::Options::default())
-            .map_err(|e| Error::Gix(Box::new(e)))?;
-
+impl std::fmt::Display for ConflictExit {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Ok(())
     }
+}
 
-    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error> {
-        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
-        let gitattributes = workdir.join(".gitattributes");
+impl std::error::Error for ConflictExit {}
 
-        let existing: Vec<u8> = if gitattributes.exists() {
-            std::fs::read(&gitattributes)?
+pub struct Executor(pub gix::Repository);
+
+impl Executor {
+    pub fn discover() -> Result<Self> {
+        Ok(Self(gix::discover(".")?))
+    }
+
+    pub fn run(&self, cli: cli::Cli, io: &mut Io) -> Result<()> {
+        match cli.command {
+            cli::Command::Add {
+                url,
+                name,
+                ref_name,
+                prefix,
+                patterns,
+                squash,
+                dry_run,
+                message,
+            } => self.add(
+                name, url, ref_name, prefix, patterns, squash, dry_run, message, io,
+            ),
+            cli::Command::Update {
+                name,
+                message,
+                force,
+                dry_run,
+            } => self.update(name, message, force, dry_run, io),
+            cli::Command::Apply {
+                name,
+                message,
+                force,
+            } => self.apply(name, message, force, io),
+            cli::Command::Status { name, fetch } => self.status(name, fetch, io),
+            cli::Command::Remove { name, keep_files } => self.remove(name, keep_files, io),
+            cli::Command::List => self.list(io),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &self,
+        name: Option<String>,
+        url: String,
+        ref_name: Option<String>,
+        prefix: Option<String>,
+        patterns: Vec<String>,
+        squash: bool,
+        dry_run: bool,
+        message: Option<String>,
+        io: &mut Io,
+    ) -> Result<()> {
+        let repo = &self.0;
+        let cfg_path = config_path(repo)?;
+        let mut config = load_config(&cfg_path)?;
+
+        let name = match name {
+            Some(n) => n,
+            None => name_from_url(&url).ok_or_else(|| {
+                format!("cannot derive a vendor name from URL {url:?}; pass a name explicitly")
+            })?,
+        };
+        let vendor_name = VendorName::new(&name)?;
+        let mode = if squash {
+            VendorMode::Squash
         } else {
-            Vec::new()
+            VendorMode::default()
+        };
+        let patterns: Vec<String> = if patterns.is_empty() {
+            let dest = prefix.map_or_else(
+                || format!("vendor/{name}/"),
+                |p| {
+                    if p.ends_with('/') { p } else { format!("{p}/") }
+                },
+            );
+            vec![format!("**:{dest}")]
+        } else {
+            patterns
+        };
+        let mut entry = VendorEntry {
+            name: vendor_name,
+            url,
+            ref_name,
+            base: None,
+            patterns: patterns.iter().map(|p| PatternMapping::parse(p)).collect(),
+            mode,
         };
 
-        let attr_value = format!("vendor={}", entry.name.as_str());
-        let attr_bytes = attr_value.as_bytes();
+        // Fetch before touching config — a failed fetch leaves no side effects.
+        writeln!(io.err, "Fetching {name}…")?;
+        let upstream = repo.fetch_vendor(&entry)?;
 
-        for path in paths {
-            check_attr_pattern(path.as_bytes())?;
-        }
-
-        let already_tracked: std::collections::HashSet<Vec<u8>> = existing
-            .lines()
-            .filter_map(|line| {
-                let (pattern, attr) = split_attr_line(line)?;
-                if attr == attr_bytes {
-                    Some(pattern.into_owned())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let mut out = existing.clone();
-        if !out.is_empty() && out.last() != Some(&b'\n') {
-            out.push(b'\n');
-        }
-        for path in paths {
-            if !already_tracked.contains(path.as_bytes()) {
-                out.extend_from_slice(path.as_bytes());
-                out.push(b' ');
-                out.extend_from_slice(attr_bytes);
-                out.push(b'\n');
-            }
-        }
-
-        if out != existing {
-            std::fs::write(&gitattributes, &out)?;
-        }
-
-        stage_gitattributes(self, &out)?;
-        Ok(())
-    }
-
-    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error> {
-        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
-        let gitattributes = workdir.join(".gitattributes");
-
-        if !gitattributes.exists() {
+        if dry_run {
+            writeln!(io.err, "Would add vendor {name} at {upstream}.")?;
             return Ok(());
         }
 
-        let existing: Vec<u8> = std::fs::read(&gitattributes)?;
-        let attr_value = format!("vendor={}", entry.name.as_str());
-        let attr_bytes = attr_value.as_bytes();
+        let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
 
-        let remove: std::collections::HashSet<&[u8]> = paths.iter().map(|b| b.as_bytes()).collect();
+        let msg = message
+            .clone()
+            .unwrap_or_else(|| format!("vendor: add {name}"));
 
-        let mut filtered: Vec<u8> = Vec::with_capacity(existing.len());
-        for line in existing.lines() {
-            let keep = match split_attr_line(line) {
-                Some((pattern, attr)) => !(attr == attr_bytes && remove.contains(pattern.as_ref())),
-                None => true,
-            };
-            if keep {
-                filtered.extend_from_slice(line);
-                filtered.push(b'\n');
+        match head_oid {
+            Some(ours) => {
+                let merge = repo.merge_vendor(&entry, ours, upstream)?;
+
+                if merge.has_conflicts() {
+                    repo.checkout_vendor_conflicted(&entry, &merge)?;
+                    let new_paths = tree_paths(repo, merge.result_tree)?;
+                    reconcile_tracked_paths(repo, &entry, &[], &new_paths)?;
+                    entry.base = Some(merge.upstream_commit);
+                    config.insert(&entry)?;
+                    let config_str = save_config(&config, &cfg_path)?;
+                    stage_gitvendors(repo, config_str.as_bytes())?;
+                    repo.prepare_merge(&entry, &merge, &msg)?;
+                    let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
+                    writeln!(io.err, "Conflict in: {}", paths.join(", "))?;
+                    writeln!(io.err, "Resolve conflicts, then run `git commit`.")?;
+                    return Err(ConflictExit.into());
+                }
+
+                let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
+                let new_paths = tree_paths(repo, merge.result_tree)?;
+                reconcile_tracked_paths(repo, &entry, &[], &new_paths)?;
+
+                entry.base = Some(merge.upstream_commit);
+                config.insert(&entry)?;
+                let config_str = save_config(&config, &cfg_path)?;
+
+                stage_gitvendors(repo, config_str.as_bytes())?;
+                repo.prepare_merge(&entry, &merge, &msg)?;
+                writeln!(io.err, "Staged; run `git commit` to complete.")?;
+            }
+            None => {
+                let tree = repo.upstream_tree(&entry, upstream)?;
+                let _full_tree = repo.checkout_vendor(&entry, tree)?;
+                let new_paths = tree_paths(repo, tree)?;
+                let path_refs: Vec<&gix::bstr::BStr> =
+                    new_paths.iter().map(|b| b.as_ref()).collect();
+                repo.track_vendor(&entry, &path_refs)?;
+
+                entry.base = Some(upstream);
+                config.insert(&entry)?;
+                let config_str = save_config(&config, &cfg_path)?;
+
+                stage_gitvendors(repo, config_str.as_bytes())?;
+                writeln!(io.err, "Staged; run `git commit` to complete.")?;
             }
         }
 
-        if filtered != existing {
-            std::fs::write(&gitattributes, &filtered)?;
-        }
-
-        stage_gitattributes(self, &filtered)?;
         Ok(())
     }
 
-    fn prepare_merge(
+    fn update(
         &self,
-        entry: &VendorEntry,
-        merge: &VendorMerge,
-        message: &str,
-    ) -> Result<(), Error> {
-        let git_dir = self.git_dir();
-        if entry.mode == VendorMode::Squash {
-            std::fs::write(git_dir.join("SQUASH_MSG"), message.as_bytes())?;
-        } else {
-            std::fs::write(
-                git_dir.join("MERGE_HEAD"),
-                format!("{}\n", merge.upstream_commit),
-            )?;
-            std::fs::write(git_dir.join("MERGE_MSG"), message.as_bytes())?;
+        name: Option<String>,
+        message: Option<String>,
+        force: bool,
+        dry_run: bool,
+        io: &mut Io,
+    ) -> Result<()> {
+        let repo = &self.0;
+        let cfg_path = config_path(repo)?;
+        let mut config = load_config(&cfg_path)?;
+
+        // Multi-vendor updates always auto-commit (one commit per vendor); only a
+        // single-vendor update without -m uses the prepare-merge path.
+        let auto_commit = name.is_none() || message.is_some();
+
+        let entries: Vec<VendorEntry> = match name {
+            Some(ref n) => vec![require_entry(&config, n)?],
+            None => config.entries()?,
+        };
+
+        if entries.is_empty() {
+            writeln!(io.err, "No vendors configured.")?;
+            return Ok(());
         }
+
+        let head_oid = repo
+            .head_commit()
+            .map(|c| c.id().detach())
+            .map_err(|e| format!("HEAD: {e}"))?;
+
+        let mut current_head = head_oid;
+
+        for mut entry in entries {
+            let n = entry.name.as_str().to_owned();
+            writeln!(io.err, "Fetching {n}…")?;
+            let upstream = repo.fetch_vendor(&entry)?;
+
+            let status = repo.vendor_status(&entry)?;
+            match status {
+                VendorStatus::UpToDate => {
+                    writeln!(io.err, "{n}: already up to date")?;
+                    continue;
+                }
+                VendorStatus::ForcePushed { .. } if !force => {
+                    writeln!(
+                        io.err,
+                        "{n}: upstream was force-pushed; re-run with --force to accept"
+                    )?;
+                    continue;
+                }
+                _ => {}
+            }
+
+            if dry_run {
+                writeln!(io.err, "Would update {n} to {upstream}.")?;
+                continue;
+            }
+
+            let msg = message
+                .clone()
+                .unwrap_or_else(|| format!("vendor: update {n}"));
+
+            let old_paths: Vec<gix::bstr::BString> =
+                repo.vendor_paths(&entry, current_head).unwrap_or_default();
+
+            let merge = repo.merge_vendor(&entry, current_head, upstream)?;
+
+            if merge.has_conflicts() {
+                repo.checkout_vendor_conflicted(&entry, &merge)?;
+                let new_paths = tree_paths(repo, merge.result_tree)?;
+                reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+                entry.base = Some(merge.upstream_commit);
+                config.insert(&entry)?;
+                let config_str = save_config(&config, &cfg_path)?;
+                stage_gitvendors(repo, config_str.as_bytes())?;
+                repo.prepare_merge(&entry, &merge, &msg)?;
+                let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
+                writeln!(io.err, "{n}: conflict in {}", paths.join(", "))?;
+                writeln!(io.err, "Resolve conflicts, then run `git commit`.")?;
+                return Err(ConflictExit.into());
+            }
+
+            let full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
+            let new_paths = tree_paths(repo, merge.result_tree)?;
+            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+
+            entry.base = Some(merge.upstream_commit);
+            config.insert(&entry)?;
+            let config_str = save_config(&config, &cfg_path)?;
+
+            if auto_commit {
+                let attrs_blob = staged_attrs_blob(repo)?;
+                let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
+                let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
+                commit_and_advance(repo, &entry, &merge, tree, current_head, &msg)?;
+                current_head = repo
+                    .head_commit()
+                    .map(|c| c.id().detach())
+                    .map_err(|e| format!("HEAD after commit: {e}"))?;
+                writeln!(io.err, "Updated {n}.")?;
+            } else {
+                stage_gitvendors(repo, config_str.as_bytes())?;
+                repo.prepare_merge(&entry, &merge, &msg)?;
+                writeln!(io.err, "Updated {n}. Run `git commit` to record the merge.")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply(
+        &self,
+        name: Option<String>,
+        message: Option<String>,
+        force: bool,
+        io: &mut Io,
+    ) -> Result<()> {
+        let repo = &self.0;
+        let cfg_path = config_path(repo)?;
+        let config = load_config(&cfg_path)?;
+
+        let entries: Vec<VendorEntry> = match name {
+            Some(ref n) => vec![require_entry(&config, n)?],
+            None => config.entries()?,
+        };
+
+        if entries.is_empty() {
+            writeln!(io.err, "No vendors configured.")?;
+            return Ok(());
+        }
+
+        let head_oid = repo
+            .head_commit()
+            .map(|c| c.id().detach())
+            .map_err(|e| format!("HEAD: {e}"))?;
+
+        // Patterns as last committed, for the local-modification check: a vendor
+        // whose ours tree differs from the pristine upstream tree of its recorded
+        // base carries patches that re-materializing would discard.
+        let old_config = config_at(repo, head_oid)?;
+
+        let config_str = save_config(&config, &cfg_path)?;
+        let mut current_head = head_oid;
+
+        for entry in entries {
+            let n = entry.name.as_str().to_owned();
+            let Some(base) = entry.base else {
+                writeln!(
+                    io.err,
+                    "{n}: no recorded base; run `git vendor update {n}` first"
+                )?;
+                continue;
+            };
+
+            let pristine = old_config
+                .as_ref()
+                .and_then(|c| c.get(&n).ok().flatten())
+                .and_then(|old| old.base.map(|b| (old, b)))
+                .map(|(old, b)| repo.upstream_tree(&old, b))
+                .transpose()?;
+            if let Some(pristine) = pristine {
+                let ours = repo.ours_tree(&entry, current_head)?;
+                if ours != pristine && !force {
+                    let pristine_blobs = tree_blobs(repo, pristine)?;
+                    let our_blobs = tree_blobs(repo, ours)?;
+                    let mut modified: Vec<String> = our_blobs
+                        .iter()
+                        .filter(|(p, oid)| pristine_blobs.get(*p) != Some(oid))
+                        .map(|(p, _)| p.to_string())
+                        .collect();
+                    modified.extend(
+                        pristine_blobs
+                            .keys()
+                            .filter(|p| !our_blobs.contains_key(*p))
+                            .map(|p| p.to_string()),
+                    );
+                    modified.sort();
+                    writeln!(
+                        io.err,
+                        "{n}: vendored files have local modifications ({}); \
+                         re-run with --force to discard them",
+                        modified.join(", ")
+                    )?;
+                    continue;
+                }
+            }
+
+            let new_tree = repo.upstream_tree(&entry, base)?;
+            let old_paths: Vec<gix::bstr::BString> =
+                repo.vendor_paths(&entry, current_head).unwrap_or_default();
+
+            let full_tree = repo.checkout_vendor(&entry, new_tree)?;
+            let new_paths = tree_paths(repo, new_tree)?;
+            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+
+            let attrs_blob = staged_attrs_blob(repo)?;
+            let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
+            let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
+
+            let head_tree = repo
+                .find_commit(current_head)
+                .map_err(|e| format!("{e}"))?
+                .tree()
+                .map_err(|e| format!("{e}"))?
+                .id()
+                .detach();
+            if tree == head_tree {
+                writeln!(io.err, "{n}: nothing to apply")?;
+                continue;
+            }
+
+            let msg = message
+                .clone()
+                .unwrap_or_else(|| format!("vendor: apply {n}"));
+
+            // A single-parent commit: no upstream changed, so unlike add/update
+            // there is no merge edge to record.
+            let author = author_sig(repo)?;
+            let committer = committer_sig(repo)?;
+            let mut tbuf_a = gix::date::parse::TimeBuf::default();
+            let mut tbuf_c = gix::date::parse::TimeBuf::default();
+            let commit = gix::objs::Commit {
+                tree,
+                parents: [current_head].into_iter().collect(),
+                author: author.to_ref(&mut tbuf_a).into(),
+                committer: committer.to_ref(&mut tbuf_c).into(),
+                encoding: None,
+                message: msg.as_str().into(),
+                extra_headers: Vec::new(),
+            };
+            let new_commit = repo.write_object(&commit)?.detach();
+            advance_head(repo, new_commit, &msg)?;
+            current_head = new_commit;
+            writeln!(io.err, "Applied {n}.")?;
+        }
+
+        Ok(())
+    }
+
+    fn status(&self, name: Option<String>, fetch: bool, io: &mut Io) -> Result<()> {
+        let repo = &self.0;
+        let cfg_path = config_path(repo)?;
+        let config = load_config(&cfg_path)?;
+
+        let entries: Vec<VendorEntry> = match name {
+            Some(ref n) => vec![require_entry(&config, n)?],
+            None => config.entries()?,
+        };
+
+        if entries.is_empty() {
+            writeln!(io.err, "No vendors configured.")?;
+            return Ok(());
+        }
+
+        for entry in &entries {
+            if fetch {
+                repo.fetch_vendor(entry)?;
+            }
+            let status = repo.vendor_status(entry)?;
+            let label = match &status {
+                VendorStatus::NotFetched => "not fetched".to_owned(),
+                VendorStatus::UpToDate => "up to date".to_owned(),
+                VendorStatus::UpdateAvailable { upstream } => {
+                    format!("update available ({})", upstream.to_hex())
+                }
+                VendorStatus::ForcePushed { upstream } => {
+                    format!("force-pushed upstream ({})", upstream.to_hex())
+                }
+            };
+            writeln!(io.out, "{}\t{}\t{label}", entry.name, entry.url)?;
+        }
+
+        Ok(())
+    }
+
+    fn remove(&self, name: String, keep_files: bool, io: &mut Io) -> Result<()> {
+        let repo = &self.0;
+        let cfg_path = config_path(repo)?;
+        let mut config = load_config(&cfg_path)?;
+
+        let entry = require_entry(&config, &name)?;
+
+        if !keep_files {
+            let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
+
+            if let Some(oid) = head_oid {
+                use gix::bstr::ByteSlice as _;
+                let workdir = repo.workdir().ok_or("not a working-copy repository")?;
+                let paths = repo.vendor_paths(&entry, oid)?;
+                for p in &paths {
+                    let abs = workdir.join(gix::path::from_bstr(p).as_ref());
+                    if abs.symlink_metadata().is_ok() {
+                        std::fs::remove_file(&abs)?;
+                    }
+                }
+                let path_refs: Vec<&gix::bstr::BStr> = paths.iter().map(|b| b.as_ref()).collect();
+                repo.untrack_vendor(&entry, &path_refs)?;
+
+                let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
+                for p in &path_refs {
+                    let pb = p.as_bytes();
+                    index.remove_entries(|_, path, _| path == pb.as_bstr());
+                }
+                index.sort_entries();
+                index
+                    .write(gix::index::write::Options::default())
+                    .map_err(|e| format!("{e}"))?;
+            }
+        }
+
+        config.remove(&name)?;
+        let config_str = save_config(&config, &cfg_path)?;
+        stage_gitvendors(repo, config_str.as_bytes())?;
+        writeln!(io.err, "Removed vendor {name}.")?;
+        Ok(())
+    }
+
+    fn list(&self, io: &mut Io) -> Result<()> {
+        let repo = &self.0;
+        let cfg_path = config_path(repo)?;
+        let config = load_config(&cfg_path)?;
+        let entries = config.entries()?;
+
+        if entries.is_empty() {
+            writeln!(io.err, "No vendors configured.")?;
+            return Ok(());
+        }
+
+        for entry in &entries {
+            let ref_label = entry.ref_name.as_deref().unwrap_or("HEAD");
+            let mode_label = entry.mode.as_str();
+            writeln!(
+                io.out,
+                "{}\t{}\t{ref_label}\t{mode_label}",
+                entry.name, entry.url
+            )?;
+        }
+
         Ok(())
     }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Return `Err` if `path` contains characters that require C-style quoting in
-/// `.gitattributes` (space, tab, `#`, `"`, `\`, or control characters).
-/// Git source paths from tree objects never contain these in practice.
-fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
-    let needs_quoting = |b: u8| b.is_ascii_control() || matches!(b, b' ' | b'#' | b'"' | b'\\');
-    if path.iter().copied().any(needs_quoting) {
-        return Err(Error::InvalidPath(
-            String::from_utf8_lossy(path).into_owned(),
-        ));
+fn config_path(repo: &gix::Repository) -> Result<PathBuf> {
+    let workdir = repo.workdir().ok_or("not a working-copy repository")?;
+    Ok(workdir.join(".gitvendors"))
+}
+
+fn load_config(path: &Path) -> Result<VendorConfig> {
+    if path.exists() {
+        Ok(VendorConfig::open(path)?)
+    } else {
+        Ok(VendorConfig::parse("")?)
+    }
+}
+
+/// Write `config` to `path` and return the serialized bytes for blob staging.
+fn save_config(config: &VendorConfig, path: &Path) -> Result<String> {
+    let s = config.to_string();
+    std::fs::write(path, &s)?;
+    Ok(s)
+}
+
+fn require_entry(config: &VendorConfig, name: &str) -> Result<VendorEntry> {
+    config
+        .get(name)?
+        .ok_or_else(|| format!("no vendor named {name:?}").into())
+}
+
+fn tree_paths(repo: &gix::Repository, tree_id: gix::ObjectId) -> Result<Vec<gix::bstr::BString>> {
+    let index = repo.index_from_tree(&tree_id)?;
+    Ok(index
+        .entries()
+        .iter()
+        .map(|e| e.path(&index).into())
+        .collect())
+}
+
+fn tree_blobs(
+    repo: &gix::Repository,
+    tree_id: gix::ObjectId,
+) -> Result<std::collections::BTreeMap<gix::bstr::BString, gix::ObjectId>> {
+    let index = repo.index_from_tree(&tree_id)?;
+    Ok(index
+        .entries()
+        .iter()
+        .map(|e| (e.path(&index).into(), e.id))
+        .collect())
+}
+
+fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<VendorConfig>> {
+    let tree = repo
+        .find_commit(commit)
+        .map_err(|e| format!("{e}"))?
+        .tree()
+        .map_err(|e| format!("{e}"))?;
+    let Some(entry) = tree
+        .lookup_entry_by_path(".gitvendors")
+        .map_err(|e| format!("{e}"))?
+    else {
+        return Ok(None);
+    };
+    let blob = entry.object().map_err(|e| format!("{e}"))?;
+    let s = String::from_utf8_lossy(&blob.data).into_owned();
+    Ok(Some(VendorConfig::parse(&s)?))
+}
+
+fn advance_head(repo: &gix::Repository, new_commit: gix::ObjectId, msg: &str) -> Result<()> {
+    use gix::refs::Target;
+    use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+
+    let name: gix::refs::FullName = "HEAD".try_into()?;
+    repo.edit_references([RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: msg.as_bytes().into(),
+            },
+            expected: PreviousValue::Any,
+            new: Target::Object(new_commit),
+        },
+        name,
+        deref: true,
+    }])?;
+    Ok(())
+}
+
+fn committer_sig(repo: &gix::Repository) -> Result<gix::actor::Signature> {
+    let sig_ref = repo
+        .committer()
+        .ok_or("no committer identity; set user.name and user.email")?
+        .map_err(|e| format!("committer: {e}"))?;
+    sig_ref
+        .to_owned()
+        .map_err(|e| format!("committer time: {e}").into())
+}
+
+fn author_sig(repo: &gix::Repository) -> Result<gix::actor::Signature> {
+    let sig_ref = repo
+        .author()
+        .ok_or("no author identity; set user.name and user.email")?
+        .map_err(|e| format!("author: {e}"))?;
+    sig_ref
+        .to_owned()
+        .map_err(|e| format!("author time: {e}").into())
+}
+
+fn reconcile_tracked_paths(
+    repo: &gix::Repository,
+    entry: &VendorEntry,
+    old_paths: &[gix::bstr::BString],
+    new_paths: &[gix::bstr::BString],
+) -> Result<()> {
+    use gix::bstr::BStr;
+    let track: Vec<&BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
+    repo.track_vendor(entry, &track)?;
+
+    let new_set: std::collections::HashSet<&[u8]> =
+        new_paths.iter().map(|b| b.as_slice()).collect();
+    let removed: Vec<&BStr> = old_paths
+        .iter()
+        .filter(|b| !new_set.contains(b.as_slice()))
+        .map(|b| b.as_ref())
+        .collect();
+    if !removed.is_empty() {
+        repo.untrack_vendor(entry, &removed)?;
     }
     Ok(())
 }
 
-/// Parse one `.gitattributes` line into `(unquoted_pattern, trimmed_attrs)`.
+/// Return the OID of the `.gitattributes` blob already staged in the index by
+/// `track_vendor`, so callers can include it in a commit tree.
 ///
-/// Returns `None` for blank lines, comment lines, or lines with no attribute
-/// separator.  Handles both plain and C-style-quoted patterns using
-/// [`gix_quote::ansi_c::undo`].
-fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
-    if line.is_empty() || line[0] == b'#' {
-        return None;
-    }
-    if line.starts_with(b"\"") {
-        let (pattern, consumed) = gix_quote::ansi_c::undo(line.as_bstr()).ok()?;
-        let rest = line.get(consumed..)?;
-        if rest.first().is_some_and(|&b| b == b' ' || b == b'\t') {
-            let owned: Vec<u8> = pattern.as_ref().to_vec();
-            Some((std::borrow::Cow::Owned(owned), rest[1..].trim()))
-        } else {
-            None
-        }
-    } else {
-        let pos = line.iter().position(|&b| b == b' ' || b == b'\t')?;
-        if pos == 0 {
-            return None; // leading whitespace — no valid pattern before the separator
-        }
-        Some((
-            std::borrow::Cow::Borrowed(&line[..pos]),
-            line[pos + 1..].trim(),
-        ))
-    }
+/// Unlike `stage_gitvendors`, this writes nothing: `track_vendor` stages
+/// `.gitattributes` as a working-copy side effect and this only reads the
+/// resulting index entry back.
+fn staged_attrs_blob(repo: &gix::Repository) -> Result<gix::ObjectId> {
+    use gix::bstr::ByteSlice as _;
+    let index = repo.open_index().map_err(|e| format!("{e}"))?;
+    index
+        .entries()
+        .iter()
+        .find(|e| e.path(&index) == b".gitattributes".as_bstr())
+        .map(|e| e.id)
+        .ok_or_else(|| "no .gitattributes in index after tracking".into())
 }
 
-#[cfg(test)]
-#[path = "exe_tests.rs"]
-mod tests;
-
-/// Write `content` as a blob into the object database and upsert the
-/// `.gitattributes` index entry to point at it.
-///
-/// This exists because [`VendorWorktree::track_vendor`] and
-/// [`VendorWorktree::untrack_vendor`] write `.gitattributes` as a working-copy
-/// side effect rather than folding it into the vendor tree before
-/// `index_from_tree` runs. Ideally those methods would return a blob OID so
-/// the caller could include `.gitattributes` in `full_tree` like any other
-/// file, making this function unnecessary.
-fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<(), Error> {
+/// Write `content` as a blob, upsert the `.gitvendors` index entry, and return
+/// the blob OID so callers can include it in a commit tree.
+fn stage_gitvendors(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId> {
+    use gix::bstr::ByteSlice as _;
     let blob_oid = repo
-        .write_object(gix::objs::BlobRef { data: content })?
+        .write_object(gix::objs::BlobRef { data: content })
+        .map_err(|e| format!("{e}"))?
         .detach();
-
-    let mut index = repo.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
-    index.remove_entries(|_, path, _| path == b".gitattributes".as_bstr());
+    let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
+    index.remove_entries(|_, path, _| path == b".gitvendors".as_bstr());
     index.dangerously_push_entry(
         gix::index::entry::Stat::default(),
         blob_oid,
         gix::index::entry::Flags::empty(),
         gix::index::entry::Mode::FILE,
-        b".gitattributes".as_bstr(),
+        b".gitvendors".as_bstr(),
     );
     index.sort_entries();
     index
         .write(gix::index::write::Options::default())
-        .map_err(|e| Error::Gix(Box::new(e)))?;
+        .map_err(|e| format!("{e}"))?;
+    Ok(blob_oid)
+}
 
-    Ok(())
+fn final_tree(
+    repo: &gix::Repository,
+    full_tree: gix::ObjectId,
+    attrs_blob: gix::ObjectId,
+    vendors_blob: gix::ObjectId,
+) -> Result<gix::ObjectId> {
+    use gix::bstr::ByteSlice as _;
+    let mut editor = repo
+        .find_object(full_tree)
+        .map_err(|e| format!("{e}"))?
+        .into_tree()
+        .edit()
+        .map_err(|e| format!("{e}"))?;
+    editor
+        .upsert(
+            b".gitattributes".as_bstr(),
+            gix::objs::tree::EntryKind::Blob,
+            attrs_blob,
+        )
+        .map_err(|e| format!("{e}"))?;
+    editor
+        .upsert(
+            b".gitvendors".as_bstr(),
+            gix::objs::tree::EntryKind::Blob,
+            vendors_blob,
+        )
+        .map_err(|e| format!("{e}"))?;
+    Ok(editor.write().map_err(|e| format!("{e}"))?.detach())
+}
+
+/// Mint a vendor merge commit using `tree` and advance HEAD.
+///
+/// In squash mode a parentless squash commit is minted and used as the
+/// second parent; in merge mode the upstream commit is used directly.
+fn commit_and_advance(
+    repo: &gix::Repository,
+    entry: &VendorEntry,
+    merge: &git_vendor::VendorMerge,
+    tree: gix::ObjectId,
+    parent: gix::ObjectId,
+    message: &str,
+) -> Result<()> {
+    let author = author_sig(repo)?;
+    let committer = committer_sig(repo)?;
+
+    let mut tbuf_a = gix::date::parse::TimeBuf::default();
+    let mut tbuf_c = gix::date::parse::TimeBuf::default();
+
+    let second_parent = if entry.mode == VendorMode::Squash {
+        let upstream_tree = repo.upstream_tree(entry, merge.upstream_commit)?;
+        let squash = gix::objs::Commit {
+            tree: upstream_tree,
+            parents: Default::default(),
+            author: author.to_ref(&mut tbuf_a).into(),
+            committer: committer.to_ref(&mut tbuf_c).into(),
+            encoding: None,
+            message: format!(
+                "squash: vendor '{}'\n\nSquashed-upstream: {}\n",
+                entry.name, merge.upstream_commit
+            )
+            .into(),
+            extra_headers: Vec::new(),
+        };
+        repo.write_object(&squash)?.detach()
+    } else {
+        merge.upstream_commit
+    };
+
+    let mut tbuf_a2 = gix::date::parse::TimeBuf::default();
+    let mut tbuf_c2 = gix::date::parse::TimeBuf::default();
+    let commit = gix::objs::Commit {
+        tree,
+        parents: [parent, second_parent].into_iter().collect(),
+        author: author.to_ref(&mut tbuf_a2).into(),
+        committer: committer.to_ref(&mut tbuf_c2).into(),
+        encoding: None,
+        message: message.into(),
+        extra_headers: Vec::new(),
+    };
+    let new_commit = repo.write_object(&commit)?.detach();
+    advance_head(repo, new_commit, message)
+}
+
+fn name_from_url(url: &str) -> Option<String> {
+    let stem = url
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .find(|s| !s.is_empty())?;
+    let stem = stem
+        .strip_suffix(".git")
+        .or_else(|| stem.strip_suffix(".bundle"))
+        .unwrap_or(stem);
+    if stem.is_empty() {
+        None
+    } else {
+        Some(stem.to_owned())
+    }
 }
