@@ -260,10 +260,8 @@ impl VendorWorktree for gix::Repository {
 /// `.gitattributes` (space, tab, `#`, `"`, `\`, or control characters).
 /// Git source paths from tree objects never contain these in practice.
 fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
-    if path
-        .iter()
-        .any(|&b| matches!(b, b' ' | b'\t' | b'#' | b'"' | b'\\' | 0..=31 | 127))
-    {
+    let needs_quoting = |b: u8| b.is_ascii_control() || matches!(b, b' ' | b'#' | b'"' | b'\\');
+    if path.iter().copied().any(needs_quoting) {
         return Err(Error::InvalidPath(
             String::from_utf8_lossy(path).into_owned(),
         ));
