@@ -40,6 +40,11 @@ fn run(cli: cli::Cli) -> Result<()> {
             force,
             dry_run,
         } => cmd_update(name, message, force, dry_run),
+        cli::Command::Apply {
+            name,
+            message,
+            force,
+        } => cmd_apply(name, message, force),
         cli::Command::Status { name, fetch } => cmd_status(name, fetch),
         cli::Command::Remove { name, keep_files } => cmd_remove(name, keep_files),
         cli::Command::List => cmd_list(),
@@ -85,6 +90,36 @@ fn tree_paths(repo: &gix::Repository, tree_id: gix::ObjectId) -> Result<Vec<gix:
         .iter()
         .map(|e| e.path(&index).into())
         .collect())
+}
+
+fn tree_blobs(
+    repo: &gix::Repository,
+    tree_id: gix::ObjectId,
+) -> Result<std::collections::BTreeMap<gix::bstr::BString, gix::ObjectId>> {
+    let index = repo.index_from_tree(&tree_id)?;
+    Ok(index
+        .entries()
+        .iter()
+        .map(|e| (e.path(&index).into(), e.id))
+        .collect())
+}
+
+/// The `.gitvendors` config as committed at `commit`, or `None` if absent.
+fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<VendorConfig>> {
+    let tree = repo
+        .find_commit(commit)
+        .map_err(|e| format!("{e}"))?
+        .tree()
+        .map_err(|e| format!("{e}"))?;
+    let Some(entry) = tree
+        .lookup_entry_by_path(".gitvendors")
+        .map_err(|e| format!("{e}"))?
+    else {
+        return Ok(None);
+    };
+    let blob = entry.object().map_err(|e| format!("{e}"))?;
+    let s = String::from_utf8_lossy(&blob.data).into_owned();
+    Ok(Some(VendorConfig::parse(&s)?))
 }
 
 fn advance_head(repo: &gix::Repository, new_commit: gix::ObjectId, msg: &str) -> Result<()> {
@@ -520,6 +555,125 @@ fn cmd_update(
             repo.prepare_merge(&entry, &merge, &msg)?;
             eprintln!("Updated {n}. Run `git commit` to record the merge.");
         }
+    }
+
+    Ok(())
+}
+
+fn cmd_apply(name: Option<String>, message: Option<String>, force: bool) -> Result<()> {
+    let repo = discover()?;
+    let cfg_path = config_path(&repo)?;
+    let config = load_config(&cfg_path)?;
+
+    let entries: Vec<VendorEntry> = match name {
+        Some(ref n) => vec![require_entry(&config, n)?],
+        None => config.entries()?,
+    };
+
+    if entries.is_empty() {
+        eprintln!("No vendors configured.");
+        return Ok(());
+    }
+
+    let head_oid = repo
+        .head_commit()
+        .map(|c| c.id().detach())
+        .map_err(|e| format!("HEAD: {e}"))?;
+
+    // Patterns as last committed, for the local-modification check: a vendor
+    // whose ours tree differs from the pristine upstream tree of its recorded
+    // base carries patches that re-materializing would discard.
+    let old_config = config_at(&repo, head_oid)?;
+
+    let config_str = save_config(&config, &cfg_path)?;
+    let mut current_head = head_oid;
+
+    for entry in entries {
+        let n = entry.name.as_str().to_owned();
+        let Some(base) = entry.base else {
+            eprintln!("{n}: no recorded base; run `git vendor update {n}` first");
+            continue;
+        };
+
+        let pristine = old_config
+            .as_ref()
+            .and_then(|c| c.get(&n).ok().flatten())
+            .and_then(|old| old.base.map(|b| (old, b)))
+            .map(|(old, b)| repo.upstream_tree(&old, b))
+            .transpose()?;
+        if let Some(pristine) = pristine {
+            let ours = repo.ours_tree(&entry, current_head)?;
+            if ours != pristine && !force {
+                let pristine_blobs = tree_blobs(&repo, pristine)?;
+                let our_blobs = tree_blobs(&repo, ours)?;
+                let mut modified: Vec<String> = our_blobs
+                    .iter()
+                    .filter(|(p, oid)| pristine_blobs.get(*p) != Some(oid))
+                    .map(|(p, _)| p.to_string())
+                    .collect();
+                modified.extend(
+                    pristine_blobs
+                        .keys()
+                        .filter(|p| !our_blobs.contains_key(*p))
+                        .map(|p| p.to_string()),
+                );
+                modified.sort();
+                eprintln!(
+                    "{n}: vendored files have local modifications ({}); \
+                     re-run with --force to discard them",
+                    modified.join(", ")
+                );
+                continue;
+            }
+        }
+
+        let new_tree = repo.upstream_tree(&entry, base)?;
+        let old_paths: Vec<gix::bstr::BString> =
+            repo.vendor_paths(&entry, current_head).unwrap_or_default();
+
+        let full_tree = repo.checkout_vendor(&entry, new_tree)?;
+        let new_paths = tree_paths(&repo, new_tree)?;
+        reconcile_tracked_paths(&repo, &entry, &old_paths, &new_paths)?;
+
+        let attrs_blob = stage_attrs_blob(&repo)?;
+        let vendors_blob = stage_gitvendors(&repo, config_str.as_bytes())?;
+        let tree = final_tree(&repo, full_tree, attrs_blob, vendors_blob)?;
+
+        let head_tree = repo
+            .find_commit(current_head)
+            .map_err(|e| format!("{e}"))?
+            .tree()
+            .map_err(|e| format!("{e}"))?
+            .id()
+            .detach();
+        if tree == head_tree {
+            eprintln!("{n}: nothing to apply");
+            continue;
+        }
+
+        let msg = message
+            .clone()
+            .unwrap_or_else(|| format!("vendor: apply {n}"));
+
+        // A single-parent commit: no upstream changed, so unlike add/update
+        // there is no merge edge to record.
+        let author = author_sig(&repo)?;
+        let committer = committer_sig(&repo)?;
+        let mut tbuf_a = gix::date::parse::TimeBuf::default();
+        let mut tbuf_c = gix::date::parse::TimeBuf::default();
+        let commit = gix::objs::Commit {
+            tree,
+            parents: [current_head].into_iter().collect(),
+            author: author.to_ref(&mut tbuf_a).into(),
+            committer: committer.to_ref(&mut tbuf_c).into(),
+            encoding: None,
+            message: msg.as_str().into(),
+            extra_headers: Vec::new(),
+        };
+        let new_commit = repo.write_object(&commit)?.detach();
+        advance_head(&repo, new_commit, &msg)?;
+        current_head = new_commit;
+        eprintln!("Applied {n}.");
     }
 
     Ok(())

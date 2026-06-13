@@ -75,6 +75,26 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Re-apply the configured patterns from the recorded upstream base.
+    ///
+    /// Rebuilds vendored files from `.gitvendors` without fetching. Use after
+    /// editing a vendor's `pattern` entries to move or refilter its files.
+    /// Local modifications to vendored files would be discarded, so the
+    /// command refuses to proceed on a modified vendor unless `--force` is
+    /// given.
+    Apply {
+        /// Vendor name to apply; applies all configured vendors if omitted.
+        name: Option<String>,
+
+        /// Commit message (defaults to `vendor: apply <name>`).
+        #[arg(long, short = 'm', value_name = "MSG")]
+        message: Option<String>,
+
+        /// Discard local modifications to vendored files.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Show synchronization status for one or all vendors.
     Status {
         /// Vendor name to check; checks all configured vendors if omitted.
