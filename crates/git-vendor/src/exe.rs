@@ -142,34 +142,19 @@ impl Executor {
         match head_oid {
             Some(ours) => {
                 let merge = repo.merge_vendor(&entry, ours, upstream)?;
-                let new_paths = tree_paths(repo, merge.result_tree)?;
-                let path_refs: Vec<&gix::bstr::BStr> =
-                    new_paths.iter().map(|b| b.as_ref()).collect();
-                git_vendor::validate_trackable_paths(&path_refs)?;
-
-                if merge.has_conflicts() {
-                    repo.checkout_vendor_conflicted(&entry, &merge)?;
-                    reconcile_tracked_paths(repo, &entry, &[], &new_paths, io)?;
-                    entry.base = Some(merge.upstream_commit);
-                    config.insert(&entry)?;
-                    let config_str = save_config(&config, &cfg_path)?;
-                    stage_gitvendors(repo, config_str.as_bytes())?;
-                    repo.prepare_merge(&entry, &merge, &msg)?;
-                    let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
-                    writeln!(io.err, "Conflict in: {}", paths.join(", "))?;
-                    writeln!(io.err, "Resolve conflicts, then run `git commit`.")?;
+                let conflicted = self.apply_merge(
+                    &mut config,
+                    &cfg_path,
+                    &mut entry,
+                    &merge,
+                    &[],
+                    &msg,
+                    false,
+                    io,
+                )?;
+                if conflicted {
                     return Err(ConflictExit.into());
                 }
-
-                let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-                reconcile_tracked_paths(repo, &entry, &[], &new_paths, io)?;
-
-                entry.base = Some(merge.upstream_commit);
-                config.insert(&entry)?;
-                let config_str = save_config(&config, &cfg_path)?;
-
-                stage_gitvendors(repo, config_str.as_bytes())?;
-                repo.prepare_merge(&entry, &merge, &msg)?;
                 writeln!(io.err, "Staged; run `git commit` to complete.")?;
             }
             None => {
@@ -211,11 +196,7 @@ impl Executor {
         let cfg_path = config_path(repo)?;
         let mut config = load_config(&cfg_path)?;
 
-        let entries: Vec<VendorEntry> = match name {
-            Some(ref n) => vec![require_entry(&config, n)?],
-            None => config.entries()?,
-        };
-
+        let entries = resolve_entries(&config, name.as_deref())?;
         if entries.is_empty() {
             writeln!(io.err, "No vendors configured.")?;
             return Ok(());
@@ -225,8 +206,6 @@ impl Executor {
             .head_commit()
             .map(|c| c.id().detach())
             .map_err(|e| format!("HEAD: {e}"))?;
-
-        let current_head = head_oid;
 
         for mut entry in entries {
             let n = entry.name.as_str().to_owned();
@@ -258,37 +237,21 @@ impl Executor {
                 .clone()
                 .unwrap_or_else(|| format!("vendor: update {n}"));
 
-            let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, current_head)?;
-
-            let merge = repo.merge_vendor(&entry, current_head, upstream)?;
-            let new_paths = tree_paths(repo, merge.result_tree)?;
-            let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
-            git_vendor::validate_trackable_paths(&path_refs)?;
-
-            if merge.has_conflicts() {
-                repo.checkout_vendor_conflicted(&entry, &merge)?;
-                reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?;
-                entry.base = Some(merge.upstream_commit);
-                config.insert(&entry)?;
-                let config_str = save_config(&config, &cfg_path)?;
-                stage_gitvendors(repo, config_str.as_bytes())?;
-                repo.prepare_merge(&entry, &merge, &msg)?;
-                let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
-                writeln!(io.err, "{n}: conflict in {}", paths.join(", "))?;
-                writeln!(io.err, "Resolve conflicts, then run `git commit`.")?;
+            let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, head_oid)?;
+            let merge = repo.merge_vendor(&entry, head_oid, upstream)?;
+            let conflicted = self.apply_merge(
+                &mut config,
+                &cfg_path,
+                &mut entry,
+                &merge,
+                &old_paths,
+                &msg,
+                true,
+                io,
+            )?;
+            if conflicted {
                 return Err(ConflictExit.into());
             }
-
-            let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
-                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
-
-            entry.base = Some(merge.upstream_commit);
-            config.insert(&entry)?;
-            let config_str = save_config(&config, &cfg_path)?;
-
-            stage_gitvendors(repo, config_str.as_bytes())?;
-            repo.prepare_merge(&entry, &merge, &msg)?;
             writeln!(io.err, "Updated {n}. Run `git commit` to record the merge.")?;
 
             // `prepare_merge` overwrites MERGE_HEAD rather than accumulating an
@@ -301,6 +264,62 @@ impl Executor {
         Ok(())
     }
 
+    /// Validate and stage a merge result shared by `add` and `update`: checks
+    /// that upstream paths are trackable, checks out the merged tree
+    /// (conflicted or clean), reconciles `.gitattributes`, records the new
+    /// base, and stages `.gitvendors`. Returns `Ok(true)` if the merge left
+    /// conflicts, having already printed the conflict message — the caller
+    /// should return `Err(ConflictExit)`. `require_reconcile` controls
+    /// whether an unresolved `.gitattributes` conflict on a clean merge is
+    /// itself treated as an error (true for `update`, which has old paths to
+    /// reconcile against; false for `add`'s first-merge case, which has none).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_merge(
+        &self,
+        config: &mut VendorConfig,
+        cfg_path: &Path,
+        entry: &mut VendorEntry,
+        merge: &git_vendor::VendorMerge,
+        old_paths: &[gix::bstr::BString],
+        msg: &str,
+        require_reconcile: bool,
+        io: &mut Io,
+    ) -> Result<bool> {
+        let repo = &self.0;
+        let new_paths = tree_paths(repo, merge.result_tree)?;
+        let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
+        git_vendor::validate_trackable_paths(&path_refs)?;
+
+        if merge.has_conflicts() {
+            repo.checkout_vendor_conflicted(entry, merge)?;
+            reconcile_tracked_paths(repo, entry, old_paths, &new_paths, io)?;
+            entry.base = Some(merge.upstream_commit);
+            config.insert(entry)?;
+            let config_str = save_config(config, cfg_path)?;
+            stage_gitvendors(repo, config_str.as_bytes())?;
+            repo.prepare_merge(entry, merge, msg)?;
+            let paths: Vec<_> = merge.conflicts.iter().map(|c| c.path.as_str()).collect();
+            writeln!(io.err, "{}: conflict in {}", entry.name, paths.join(", "))?;
+            writeln!(io.err, "Resolve conflicts, then run `git commit`.")?;
+            return Ok(true);
+        }
+
+        let _full_tree = repo.checkout_vendor(entry, merge.result_tree)?;
+        let reconciled = reconcile_tracked_paths(repo, entry, old_paths, &new_paths, io)?;
+        if require_reconcile {
+            reconciled
+                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
+        }
+
+        entry.base = Some(merge.upstream_commit);
+        config.insert(entry)?;
+        let config_str = save_config(config, cfg_path)?;
+
+        stage_gitvendors(repo, config_str.as_bytes())?;
+        repo.prepare_merge(entry, merge, msg)?;
+        Ok(false)
+    }
+
     /// Rebuild vendored files from `.gitvendors` without fetching (`update
     /// --no-fetch`). Use after editing a vendor's `pattern` entries to move
     /// or refilter its files. Refuses a modified vendor unless `force`.
@@ -309,11 +328,7 @@ impl Executor {
         let cfg_path = config_path(repo)?;
         let config = load_config(&cfg_path)?;
 
-        let entries: Vec<VendorEntry> = match name {
-            Some(ref n) => vec![require_entry(&config, n)?],
-            None => config.entries()?,
-        };
-
+        let entries = resolve_entries(&config, name.as_deref())?;
         if entries.is_empty() {
             writeln!(io.err, "No vendors configured.")?;
             return Ok(());
@@ -341,37 +356,15 @@ impl Executor {
                 continue;
             };
 
-            let pristine = old_config
-                .as_ref()
-                .and_then(|c| c.get(&n).ok().flatten())
-                .and_then(|old| old.base.map(|b| (old, b)))
-                .map(|(old, b)| repo.upstream_tree(&old, b))
-                .transpose()?;
-            if let Some(pristine) = pristine {
-                let ours = repo.ours_tree(&entry, head_oid)?;
-                if ours != pristine && !force {
-                    let pristine_blobs = tree_blobs(repo, pristine)?;
-                    let our_blobs = tree_blobs(repo, ours)?;
-                    let mut modified: Vec<String> = our_blobs
-                        .iter()
-                        .filter(|(p, oid)| pristine_blobs.get(*p) != Some(oid))
-                        .map(|(p, _)| p.to_string())
-                        .collect();
-                    modified.extend(
-                        pristine_blobs
-                            .keys()
-                            .filter(|p| !our_blobs.contains_key(*p))
-                            .map(|p| p.to_string()),
-                    );
-                    modified.sort();
-                    writeln!(
-                        io.err,
-                        "{n}: vendored files have local modifications ({}); \
-                         re-run with --force to discard them",
-                        modified.join(", ")
-                    )?;
-                    continue;
-                }
+            let modified = locally_modified_paths(repo, old_config.as_ref(), &entry, head_oid)?;
+            if !modified.is_empty() && !force {
+                writeln!(
+                    io.err,
+                    "{n}: vendored files have local modifications ({}); \
+                     re-run with --force to discard them",
+                    modified.join(", ")
+                )?;
+                continue;
             }
 
             let new_tree = repo.upstream_tree(&entry, base)?;
@@ -399,11 +392,7 @@ impl Executor {
         let cfg_path = config_path(repo)?;
         let config = load_config(&cfg_path)?;
 
-        let entries: Vec<VendorEntry> = match name {
-            Some(ref n) => vec![require_entry(&config, n)?],
-            None => config.entries()?,
-        };
-
+        let entries = resolve_entries(&config, name.as_deref())?;
         if entries.is_empty() {
             writeln!(io.err, "No vendors configured.")?;
             return Ok(());
@@ -532,6 +521,55 @@ fn require_entry(config: &VendorConfig, name: &str) -> Result<VendorEntry> {
     config
         .get(name)?
         .ok_or_else(|| format!("no vendor named {name:?}").into())
+}
+
+/// Resolve `name` to a single-entry list, or all configured vendors if omitted.
+fn resolve_entries(config: &VendorConfig, name: Option<&str>) -> Result<Vec<VendorEntry>> {
+    match name {
+        Some(n) => Ok(vec![require_entry(config, n)?]),
+        None => Ok(config.entries()?),
+    }
+}
+
+/// Local-modification guard for `update --no-fetch`: compares `entry`'s
+/// current working tree against the pristine upstream tree of its last
+/// recorded base, returning the sorted list of differing paths (empty if
+/// unmodified or if there's no prior recorded base to compare against).
+fn locally_modified_paths(
+    repo: &gix::Repository,
+    old_config: Option<&VendorConfig>,
+    entry: &VendorEntry,
+    head_oid: gix::ObjectId,
+) -> Result<Vec<String>> {
+    let pristine = old_config
+        .and_then(|c| c.get(entry.name.as_str()).ok().flatten())
+        .and_then(|old| old.base.map(|b| (old, b)))
+        .map(|(old, b)| repo.upstream_tree(&old, b))
+        .transpose()?;
+    let Some(pristine) = pristine else {
+        return Ok(Vec::new());
+    };
+
+    let ours = repo.ours_tree(entry, head_oid)?;
+    if ours == pristine {
+        return Ok(Vec::new());
+    }
+
+    let pristine_blobs = tree_blobs(repo, pristine)?;
+    let our_blobs = tree_blobs(repo, ours)?;
+    let mut modified: Vec<String> = our_blobs
+        .iter()
+        .filter(|(p, oid)| pristine_blobs.get(*p) != Some(oid))
+        .map(|(p, _)| p.to_string())
+        .collect();
+    modified.extend(
+        pristine_blobs
+            .keys()
+            .filter(|p| !our_blobs.contains_key(*p))
+            .map(|p| p.to_string()),
+    );
+    modified.sort();
+    Ok(modified)
 }
 
 fn tree_paths(repo: &gix::Repository, tree_id: gix::ObjectId) -> Result<Vec<gix::bstr::BString>> {
