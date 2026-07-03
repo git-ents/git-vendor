@@ -841,6 +841,19 @@ impl VendorWorktree for gix::Repository {
     }
 }
 
+/// Check that every path in `paths` can be written as a plain (unquoted)
+/// `.gitattributes` pattern. Callers that will later checkout files and
+/// mutate the working tree/index should validate paths with this *before*
+/// doing so, so an invalid path aborts cleanly instead of leaving a
+/// half-applied checkout behind — see [`check_attr_pattern`] for what's
+/// rejected.
+pub fn validate_trackable_paths(paths: &[&BStr]) -> Result<(), Error> {
+    for p in paths {
+        check_attr_pattern(p.as_bytes())?;
+    }
+    Ok(())
+}
+
 /// Return `Err` if `path` contains characters that require C-style quoting in
 /// `.gitattributes` (space, tab, `#`, `"`, `\`, or control characters).
 /// Git source paths from tree objects never contain these in practice.

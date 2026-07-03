@@ -140,10 +140,13 @@ impl Executor {
         match head_oid {
             Some(ours) => {
                 let merge = repo.merge_vendor(&entry, ours, upstream)?;
+                let new_paths = tree_paths(repo, merge.result_tree)?;
+                let path_refs: Vec<&gix::bstr::BStr> =
+                    new_paths.iter().map(|b| b.as_ref()).collect();
+                git_vendor::validate_trackable_paths(&path_refs)?;
 
                 if merge.has_conflicts() {
                     repo.checkout_vendor_conflicted(&entry, &merge)?;
-                    let new_paths = tree_paths(repo, merge.result_tree)?;
                     reconcile_tracked_paths(repo, &entry, &[], &new_paths)?;
                     entry.base = Some(merge.upstream_commit);
                     config.insert(&entry)?;
@@ -157,7 +160,6 @@ impl Executor {
                 }
 
                 let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-                let new_paths = tree_paths(repo, merge.result_tree)?;
                 reconcile_tracked_paths(repo, &entry, &[], &new_paths)?;
 
                 entry.base = Some(merge.upstream_commit);
@@ -170,10 +172,12 @@ impl Executor {
             }
             None => {
                 let tree = repo.upstream_tree(&entry, upstream)?;
-                let _full_tree = repo.checkout_vendor(&entry, tree)?;
                 let new_paths = tree_paths(repo, tree)?;
                 let path_refs: Vec<&gix::bstr::BStr> =
                     new_paths.iter().map(|b| b.as_ref()).collect();
+                git_vendor::validate_trackable_paths(&path_refs)?;
+
+                let _full_tree = repo.checkout_vendor(&entry, tree)?;
                 repo.track_vendor(&entry, &path_refs)?;
 
                 entry.base = Some(upstream);
@@ -254,10 +258,12 @@ impl Executor {
             let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, current_head)?;
 
             let merge = repo.merge_vendor(&entry, current_head, upstream)?;
+            let new_paths = tree_paths(repo, merge.result_tree)?;
+            let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
+            git_vendor::validate_trackable_paths(&path_refs)?;
 
             if merge.has_conflicts() {
                 repo.checkout_vendor_conflicted(&entry, &merge)?;
-                let new_paths = tree_paths(repo, merge.result_tree)?;
                 reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
                 entry.base = Some(merge.upstream_commit);
                 config.insert(&entry)?;
@@ -271,7 +277,6 @@ impl Executor {
             }
 
             let full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-            let new_paths = tree_paths(repo, merge.result_tree)?;
             let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
 
             entry.base = Some(merge.upstream_commit);
@@ -376,9 +381,11 @@ impl Executor {
 
             let new_tree = repo.upstream_tree(&entry, base)?;
             let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, current_head)?;
+            let new_paths = tree_paths(repo, new_tree)?;
+            let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
+            git_vendor::validate_trackable_paths(&path_refs)?;
 
             let full_tree = repo.checkout_vendor(&entry, new_tree)?;
-            let new_paths = tree_paths(repo, new_tree)?;
             let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
             let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
             let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
