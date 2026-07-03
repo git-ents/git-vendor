@@ -415,7 +415,7 @@ impl Executor {
                 extra_headers: Vec::new(),
             };
             let new_commit = repo.write_object(&commit)?.detach();
-            advance_head(repo, new_commit, &msg)?;
+            advance_head(repo, new_commit, current_head, &msg)?;
             current_head = new_commit;
             writeln!(io.err, "Applied {n}.")?;
         }
@@ -592,7 +592,12 @@ fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Ven
     Ok(Some(VendorConfig::parse(&s)?))
 }
 
-fn advance_head(repo: &gix::Repository, new_commit: gix::ObjectId, msg: &str) -> Result<()> {
+fn advance_head(
+    repo: &gix::Repository,
+    new_commit: gix::ObjectId,
+    parent: gix::ObjectId,
+    msg: &str,
+) -> Result<()> {
     use gix::refs::Target;
     use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
@@ -604,12 +609,15 @@ fn advance_head(repo: &gix::Repository, new_commit: gix::ObjectId, msg: &str) ->
                 force_create_reflog: false,
                 message: msg.as_bytes().into(),
             },
-            expected: PreviousValue::Any,
+            expected: PreviousValue::MustExistAndMatch(Target::Object(parent)),
             new: Target::Object(new_commit),
         },
         name,
         deref: true,
-    }])?;
+    }])
+    .map_err(|e| {
+        format!("HEAD moved unexpectedly since the update started; aborting to avoid clobbering a concurrent commit: {e}")
+    })?;
     Ok(())
 }
 
@@ -762,7 +770,7 @@ fn commit_and_advance(
         extra_headers: Vec::new(),
     };
     let new_commit = repo.write_object(&commit)?.detach();
-    advance_head(repo, new_commit, message)
+    advance_head(repo, new_commit, parent, message)
 }
 
 fn name_from_url(url: &str) -> Option<String> {
@@ -778,5 +786,81 @@ fn name_from_url(url: &str) -> Option<String> {
         None
     } else {
         Some(stem.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn git(args: &[&str], dir: &Path) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// `advance_head` must reject a stale `parent` instead of silently
+    /// overwriting a commit another process made after the caller
+    /// snapshotted `current_head`.
+    #[test]
+    fn advance_head_rejects_stale_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        git(&["init", "-q", "-b", "main"], dir.path());
+        git(&["config", "user.email", "t@example.com"], dir.path());
+        git(&["config", "user.name", "T"], dir.path());
+        std::fs::write(dir.path().join("f"), "one").unwrap();
+        git(&["add", "f"], dir.path());
+        git(&["commit", "-q", "-m", "one"], dir.path());
+
+        let repo = gix::open(dir.path()).expect("gix open");
+        let stale_parent = repo.head_commit().expect("head").id().detach();
+        let tree = repo
+            .head_commit()
+            .expect("head")
+            .tree_id()
+            .expect("tree")
+            .detach();
+
+        // Simulate a concurrent writer advancing HEAD after we snapshotted it.
+        git(
+            &["commit", "-q", "--allow-empty", "-m", "concurrent"],
+            dir.path(),
+        );
+        let concurrent = repo.head_commit().expect("head").id().detach();
+        assert_ne!(concurrent, stale_parent);
+
+        let author = author_sig(&repo).expect("author");
+        let committer = committer_sig(&repo).expect("committer");
+        let mut tbuf_a = gix::date::parse::TimeBuf::default();
+        let mut tbuf_c = gix::date::parse::TimeBuf::default();
+        let commit = gix::objs::Commit {
+            tree,
+            parents: [stale_parent].into_iter().collect(),
+            author: author.to_ref(&mut tbuf_a).into(),
+            committer: committer.to_ref(&mut tbuf_c).into(),
+            encoding: None,
+            message: "stale update".into(),
+            extra_headers: Vec::new(),
+        };
+        let new_commit = repo.write_object(&commit).expect("write").detach();
+
+        let result = advance_head(&repo, new_commit, stale_parent, "stale update");
+        assert!(result.is_err(), "advance_head must reject a stale parent");
+
+        let head_after = repo.head_commit().expect("head").id().detach();
+        assert_eq!(
+            head_after, concurrent,
+            "the concurrent commit must remain HEAD after the stale write is rejected"
+        );
     }
 }
