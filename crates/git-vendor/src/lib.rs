@@ -658,29 +658,40 @@ impl VendorWorktree for gix::Repository {
             }
         }
 
-        // Overlay the vendor tree onto the full HEAD tree and rebuild the index
-        // from the result. An unborn HEAD has no base commit, so the vendor tree
-        // is itself the whole tree.
+        // The tree returned to callers still overlays the vendor tree onto the
+        // full HEAD tree (an unborn HEAD has no base commit, so the vendor
+        // tree is itself the whole tree) — callers need this OID to mint
+        // commits regardless of what the on-disk index looks like.
         let full_tree = match head_id {
             Some(id) => self.vendor_overlay(entry, id, tree)?,
             None => tree,
         };
-        let mut main_index = self.index_from_tree(&full_tree)?;
+
+        // The on-disk index, however, must not be derived from `full_tree`:
+        // that overlay reads from HEAD, never the index, so any entry staged
+        // but not yet committed (an addition or modification) would be
+        // silently dropped. Instead, start from the actual current index —
+        // or an empty one if none exists yet — and surgically apply only this
+        // vendor's own path changes, leaving every other entry untouched.
+        let mut main_index = match self.open_index() {
+            Ok(idx) => idx,
+            Err(_) => self.index_from_tree(&gix::ObjectId::empty_tree(self.object_hash()))?,
+        };
         main_index.set_path(self.git_dir().join("index"));
 
-        // `index_from_tree` zeroes stat data; carry over the stats checkout just
-        // populated on the vendor entries so `git status` need not re-hash them.
-        let vendor_stats: std::collections::HashMap<gix::bstr::BString, gix::index::entry::Stat> =
-            vendor_index
-                .entries()
-                .iter()
-                .map(|e| (e.path(&vendor_index).to_owned(), e.stat))
-                .collect();
-        for (e, path) in main_index.entries_mut_with_paths() {
-            if let Some(stat) = vendor_stats.get(path) {
-                e.stat = *stat;
-            }
+        for removed in old_paths.difference(&new_paths) {
+            main_index.remove_entries(|_, p, _| p == removed.as_bstr());
         }
+        for e in vendor_index.entries() {
+            let path = e.path(&vendor_index).to_owned();
+            main_index.remove_entries(|_, p, _| p == path.as_bstr());
+            main_index.dangerously_push_entry(e.stat, e.id, e.flags, e.mode, path.as_bstr());
+        }
+        main_index.sort_entries();
+        // `remove_entries`/`dangerously_push_entry` don't update the index's
+        // cached-tree extension, so a stale one would make a native `git
+        // commit` skip rehashing changed subtrees and record the wrong tree.
+        main_index.remove_tree();
 
         main_index
             .write(gix::index::write::Options::default())
