@@ -251,8 +251,7 @@ impl Executor {
                 .clone()
                 .unwrap_or_else(|| format!("vendor: update {n}"));
 
-            let old_paths: Vec<gix::bstr::BString> =
-                repo.vendor_paths(&entry, current_head).unwrap_or_default();
+            let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, current_head)?;
 
             let merge = repo.merge_vendor(&entry, current_head, upstream)?;
 
@@ -376,8 +375,7 @@ impl Executor {
             }
 
             let new_tree = repo.upstream_tree(&entry, base)?;
-            let old_paths: Vec<gix::bstr::BString> =
-                repo.vendor_paths(&entry, current_head).unwrap_or_default();
+            let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, current_head)?;
 
             let full_tree = repo.checkout_vendor(&entry, new_tree)?;
             let new_paths = tree_paths(repo, new_tree)?;
