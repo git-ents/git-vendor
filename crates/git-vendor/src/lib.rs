@@ -149,6 +149,18 @@ impl VendorRepository for gix::Repository {
                 ))
             })?;
 
+        // `peeled_id()` only returns a peeled value when the ref advertisement
+        // carried one; fetching an annotated tag by its own object SHA
+        // (`Source::ObjectId`) has no such advertisement, so `id` may still be
+        // the tag object itself. Peel explicitly so callers always get a commit.
+        let id = self
+            .find_object(id)
+            .map_err(|e| Error::Gix(Box::new(e)))?
+            .peel_to_commit()
+            .map_err(|e| Error::Gix(Box::new(e)))?
+            .id()
+            .detach();
+
         // Force `refs/vendor/<name>` to point directly at `id`, overwriting
         // whatever gix wrote for it (see the gix#2613 note above: it may be a
         // symref into the local branch namespace rather than a direct ref to

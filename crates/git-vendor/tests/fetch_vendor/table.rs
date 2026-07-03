@@ -138,6 +138,33 @@ fn fetch_peels_annotated_tag() {
     );
 }
 
+/// Fetching by the annotated tag's own object SHA (`Source::ObjectId`, as
+/// opposed to fetching it by name) must still return the peeled commit, not
+/// the raw tag object.
+#[test]
+fn fetch_by_oid_peels_annotated_tag() {
+    let upstream = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+
+    let commit = make_upstream(upstream.path());
+    git(&["tag", "-a", "v1", "-m", "release one"], upstream.path());
+    let tag_obj = rev_parse(upstream.path(), "v1");
+    assert_ne!(tag_obj, commit, "annotated tag must be its own object");
+
+    let repo = make_local(local.path());
+    let entry = make_entry(
+        upstream.path().to_str().unwrap(),
+        Some(&tag_obj.to_string()),
+        vec![],
+    );
+
+    let got = repo.fetch_vendor(&entry).expect("fetch_vendor");
+    assert_eq!(
+        got, commit,
+        "returned id must be the peeled commit, not the tag object fetched by SHA"
+    );
+}
+
 /// `fetch_vendor` does not pull upstream tags into the local repo; only the
 /// configured tracking ref is fetched.
 #[test]
