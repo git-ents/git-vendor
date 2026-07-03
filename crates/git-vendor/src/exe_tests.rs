@@ -16,61 +16,6 @@ fn git(args: &[&str], dir: &Path) {
     );
 }
 
-/// `advance_head` must reject a stale `parent` instead of silently
-/// overwriting a commit another process made after the caller
-/// snapshotted `current_head`.
-#[test]
-fn advance_head_rejects_stale_parent() {
-    let dir = tempfile::tempdir().unwrap();
-    git(&["init", "-q", "-b", "main"], dir.path());
-    git(&["config", "user.email", "t@example.com"], dir.path());
-    git(&["config", "user.name", "T"], dir.path());
-    std::fs::write(dir.path().join("f"), "one").unwrap();
-    git(&["add", "f"], dir.path());
-    git(&["commit", "-q", "-m", "one"], dir.path());
-
-    let repo = gix::open(dir.path()).expect("gix open");
-    let stale_parent = repo.head_commit().expect("head").id().detach();
-    let tree = repo
-        .head_commit()
-        .expect("head")
-        .tree_id()
-        .expect("tree")
-        .detach();
-
-    // Simulate a concurrent writer advancing HEAD after we snapshotted it.
-    git(
-        &["commit", "-q", "--allow-empty", "-m", "concurrent"],
-        dir.path(),
-    );
-    let concurrent = repo.head_commit().expect("head").id().detach();
-    assert_ne!(concurrent, stale_parent);
-
-    let author = author_sig(&repo).expect("author");
-    let committer = committer_sig(&repo).expect("committer");
-    let mut tbuf_a = gix::date::parse::TimeBuf::default();
-    let mut tbuf_c = gix::date::parse::TimeBuf::default();
-    let commit = gix::objs::Commit {
-        tree,
-        parents: [stale_parent].into_iter().collect(),
-        author: author.to_ref(&mut tbuf_a).into(),
-        committer: committer.to_ref(&mut tbuf_c).into(),
-        encoding: None,
-        message: "stale update".into(),
-        extra_headers: Vec::new(),
-    };
-    let new_commit = repo.write_object(&commit).expect("write").detach();
-
-    let result = advance_head(&repo, new_commit, stale_parent, "stale update");
-    assert!(result.is_err(), "advance_head must reject a stale parent");
-
-    let head_after = repo.head_commit().expect("head").id().detach();
-    assert_eq!(
-        head_after, concurrent,
-        "the concurrent commit must remain HEAD after the stale write is rejected"
-    );
-}
-
 fn test_entry() -> VendorEntry {
     VendorEntry {
         name: VendorName::new("mylib").unwrap(),

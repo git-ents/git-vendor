@@ -14,9 +14,10 @@ pub struct Cli {
 pub enum Command {
     /// Add a new vendor dependency and integrate it into the current branch.
     ///
-    /// Fetches the upstream ref, three-way merges it into the working tree, and
-    /// mints a merge commit. Equivalent to `git subtree add` or a tracked
-    /// `git submodule add` that copies files instead of linking a repo.
+    /// Fetches the upstream ref and three-way merges it into the working
+    /// tree, staging the result for review. Run `git commit` to complete,
+    /// mirroring `git submodule add` (which also never commits on your
+    /// behalf).
     Add {
         /// Remote URL of the upstream repository.
         url: String,
@@ -57,6 +58,8 @@ pub enum Command {
     /// Fetch and integrate upstream updates for one or all vendors.
     ///
     /// Equivalent to `git subtree pull` or `git submodule update --remote`.
+    /// Stages the result for review; run `git commit` to complete, mirroring
+    /// `git submodule` (which never commits on your behalf).
     Update {
         /// Vendor name to update; updates all configured vendors if omitted.
         name: Option<String>,
@@ -70,29 +73,17 @@ pub enum Command {
         #[arg(long)]
         force: bool,
 
+        /// Rebuild from the recorded upstream base instead of fetching. Use
+        /// after editing a vendor's `pattern` entries to move or refilter its
+        /// files. Local modifications to vendored files would be discarded,
+        /// so this refuses to proceed on a modified vendor unless `--force`
+        /// is also given.
+        #[arg(long)]
+        no_fetch: bool,
+
         /// Show what would be fetched and merged without making any changes.
         #[arg(long)]
         dry_run: bool,
-    },
-
-    /// Re-apply the configured patterns from the recorded upstream base.
-    ///
-    /// Rebuilds vendored files from `.gitvendors` without fetching. Use after
-    /// editing a vendor's `pattern` entries to move or refilter its files.
-    /// Local modifications to vendored files would be discarded, so the
-    /// command refuses to proceed on a modified vendor unless `--force` is
-    /// given.
-    Apply {
-        /// Vendor name to apply; applies all configured vendors if omitted.
-        name: Option<String>,
-
-        /// Commit message (defaults to `vendor: apply <name>`).
-        #[arg(long, short = 'm', value_name = "MSG")]
-        message: Option<String>,
-
-        /// Discard local modifications to vendored files.
-        #[arg(long)]
-        force: bool,
     },
 
     /// Show synchronization status for one or all vendors.

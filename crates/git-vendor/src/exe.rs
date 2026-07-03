@@ -60,13 +60,9 @@ impl Executor {
                 name,
                 message,
                 force,
+                no_fetch,
                 dry_run,
-            } => self.update(name, message, force, dry_run, io),
-            cli::Command::Apply {
-                name,
-                message,
-                force,
-            } => self.apply(name, message, force, io),
+            } => self.update(name, message, force, no_fetch, dry_run, io),
             cli::Command::Status { name, fetch } => self.status(name, fetch, io),
             cli::Command::Remove { name, keep_files } => self.remove(name, keep_files, io),
             cli::Command::List => self.list(io),
@@ -97,6 +93,12 @@ impl Executor {
             })?,
         };
         let vendor_name = VendorName::new(&name)?;
+        if config.get(vendor_name.as_str())?.is_some() {
+            return Err(format!(
+                "vendor {name:?} already exists; use `git vendor update {name}` or remove it first"
+            )
+            .into());
+        }
         let mode = if squash {
             VendorMode::Squash
         } else {
@@ -197,16 +199,17 @@ impl Executor {
         name: Option<String>,
         message: Option<String>,
         force: bool,
+        no_fetch: bool,
         dry_run: bool,
         io: &mut Io,
     ) -> Result<()> {
+        if no_fetch {
+            return self.update_no_fetch(name, force, io);
+        }
+
         let repo = &self.0;
         let cfg_path = config_path(repo)?;
         let mut config = load_config(&cfg_path)?;
-
-        // Multi-vendor updates always auto-commit (one commit per vendor); only a
-        // single-vendor update without -m uses the prepare-merge path.
-        let auto_commit = name.is_none() || message.is_some();
 
         let entries: Vec<VendorEntry> = match name {
             Some(ref n) => vec![require_entry(&config, n)?],
@@ -223,7 +226,7 @@ impl Executor {
             .map(|c| c.id().detach())
             .map_err(|e| format!("HEAD: {e}"))?;
 
-        let mut current_head = head_oid;
+        let current_head = head_oid;
 
         for mut entry in entries {
             let n = entry.name.as_str().to_owned();
@@ -276,40 +279,32 @@ impl Executor {
                 return Err(ConflictExit.into());
             }
 
-            let full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
+            let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
+            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
                 .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
 
             entry.base = Some(merge.upstream_commit);
             config.insert(&entry)?;
             let config_str = save_config(&config, &cfg_path)?;
 
-            if auto_commit {
-                let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
-                let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
-                commit_and_advance(repo, &entry, &merge, tree, current_head, &msg)?;
-                current_head = repo
-                    .head_commit()
-                    .map(|c| c.id().detach())
-                    .map_err(|e| format!("HEAD after commit: {e}"))?;
-                writeln!(io.err, "Updated {n}.")?;
-            } else {
-                stage_gitvendors(repo, config_str.as_bytes())?;
-                repo.prepare_merge(&entry, &merge, &msg)?;
-                writeln!(io.err, "Updated {n}. Run `git commit` to record the merge.")?;
-            }
+            stage_gitvendors(repo, config_str.as_bytes())?;
+            repo.prepare_merge(&entry, &merge, &msg)?;
+            writeln!(io.err, "Updated {n}. Run `git commit` to record the merge.")?;
+
+            // `prepare_merge` overwrites MERGE_HEAD rather than accumulating an
+            // octopus merge, so a second vendor's pending merge in the same run
+            // would silently clobber this one's. Stop here; re-running `update`
+            // after the commit picks up the rest.
+            break;
         }
 
         Ok(())
     }
 
-    fn apply(
-        &self,
-        name: Option<String>,
-        message: Option<String>,
-        force: bool,
-        io: &mut Io,
-    ) -> Result<()> {
+    /// Rebuild vendored files from `.gitvendors` without fetching (`update
+    /// --no-fetch`). Use after editing a vendor's `pattern` entries to move
+    /// or refilter its files. Refuses a modified vendor unless `force`.
+    fn update_no_fetch(&self, name: Option<String>, force: bool, io: &mut Io) -> Result<()> {
         let repo = &self.0;
         let cfg_path = config_path(repo)?;
         let config = load_config(&cfg_path)?;
@@ -335,7 +330,6 @@ impl Executor {
         let old_config = config_at(repo, head_oid)?;
 
         let config_str = save_config(&config, &cfg_path)?;
-        let mut current_head = head_oid;
 
         for entry in entries {
             let n = entry.name.as_str().to_owned();
@@ -354,7 +348,7 @@ impl Executor {
                 .map(|(old, b)| repo.upstream_tree(&old, b))
                 .transpose()?;
             if let Some(pristine) = pristine {
-                let ours = repo.ours_tree(&entry, current_head)?;
+                let ours = repo.ours_tree(&entry, head_oid)?;
                 if ours != pristine && !force {
                     let pristine_blobs = tree_blobs(repo, pristine)?;
                     let our_blobs = tree_blobs(repo, ours)?;
@@ -381,52 +375,20 @@ impl Executor {
             }
 
             let new_tree = repo.upstream_tree(&entry, base)?;
-            let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, current_head)?;
+            let old_paths: Vec<gix::bstr::BString> = repo.vendor_paths(&entry, head_oid)?;
             let new_paths = tree_paths(repo, new_tree)?;
             let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
             git_vendor::validate_trackable_paths(&path_refs)?;
 
-            let full_tree = repo.checkout_vendor(&entry, new_tree)?;
-            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
-                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before applying")?;
-            let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
-            let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
+            let _full_tree = repo.checkout_vendor(&entry, new_tree)?;
+            reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
+                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
+            stage_gitvendors(repo, config_str.as_bytes())?;
 
-            let head_tree = repo
-                .find_commit(current_head)
-                .map_err(|e| format!("{e}"))?
-                .tree()
-                .map_err(|e| format!("{e}"))?
-                .id()
-                .detach();
-            if tree == head_tree {
-                writeln!(io.err, "{n}: nothing to apply")?;
-                continue;
-            }
-
-            let msg = message
-                .clone()
-                .unwrap_or_else(|| format!("vendor: apply {n}"));
-
-            // A single-parent commit: no upstream changed, so unlike add/update
-            // there is no merge edge to record.
-            let author = author_sig(repo)?;
-            let committer = committer_sig(repo)?;
-            let mut tbuf_a = gix::date::parse::TimeBuf::default();
-            let mut tbuf_c = gix::date::parse::TimeBuf::default();
-            let commit = gix::objs::Commit {
-                tree,
-                parents: [current_head].into_iter().collect(),
-                author: author.to_ref(&mut tbuf_a).into(),
-                committer: committer.to_ref(&mut tbuf_c).into(),
-                encoding: None,
-                message: msg.as_str().into(),
-                extra_headers: Vec::new(),
-            };
-            let new_commit = repo.write_object(&commit)?.detach();
-            advance_head(repo, new_commit, current_head, &msg)?;
-            current_head = new_commit;
-            writeln!(io.err, "Applied {n}.")?;
+            writeln!(
+                io.err,
+                "Updated {n}. Run `git commit` to record the change."
+            )?;
         }
 
         Ok(())
@@ -610,55 +572,6 @@ fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Ven
     Ok(Some(VendorConfig::parse(&s)?))
 }
 
-fn advance_head(
-    repo: &gix::Repository,
-    new_commit: gix::ObjectId,
-    parent: gix::ObjectId,
-    msg: &str,
-) -> Result<()> {
-    use gix::refs::Target;
-    use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
-
-    let name: gix::refs::FullName = "HEAD".try_into()?;
-    repo.edit_references([RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: msg.as_bytes().into(),
-            },
-            expected: PreviousValue::MustExistAndMatch(Target::Object(parent)),
-            new: Target::Object(new_commit),
-        },
-        name,
-        deref: true,
-    }])
-    .map_err(|e| {
-        format!("HEAD moved unexpectedly since the update started; aborting to avoid clobbering a concurrent commit: {e}")
-    })?;
-    Ok(())
-}
-
-fn committer_sig(repo: &gix::Repository) -> Result<gix::actor::Signature> {
-    let sig_ref = repo
-        .committer()
-        .ok_or("no committer identity; set user.name and user.email")?
-        .map_err(|e| format!("committer: {e}"))?;
-    sig_ref
-        .to_owned()
-        .map_err(|e| format!("committer time: {e}").into())
-}
-
-fn author_sig(repo: &gix::Repository) -> Result<gix::actor::Signature> {
-    let sig_ref = repo
-        .author()
-        .ok_or("no author identity; set user.name and user.email")?
-        .map_err(|e| format!("author: {e}"))?;
-    sig_ref
-        .to_owned()
-        .map_err(|e| format!("author time: {e}").into())
-}
-
 /// Whether `path` currently has any unmerged (non-zero-stage) entry in the
 /// index — i.e. it is itself part of an unresolved conflict.
 fn has_unmerged_stages(repo: &gix::Repository, path: &gix::bstr::BStr) -> Result<bool> {
@@ -736,89 +649,6 @@ fn stage_gitvendors(repo: &gix::Repository, content: &[u8]) -> Result<gix::Objec
         .write(gix::index::write::Options::default())
         .map_err(|e| format!("{e}"))?;
     Ok(blob_oid)
-}
-
-fn final_tree(
-    repo: &gix::Repository,
-    full_tree: gix::ObjectId,
-    attrs_blob: gix::ObjectId,
-    vendors_blob: gix::ObjectId,
-) -> Result<gix::ObjectId> {
-    use gix::bstr::ByteSlice as _;
-    let mut editor = repo
-        .find_object(full_tree)
-        .map_err(|e| format!("{e}"))?
-        .into_tree()
-        .edit()
-        .map_err(|e| format!("{e}"))?;
-    editor
-        .upsert(
-            b".gitattributes".as_bstr(),
-            gix::objs::tree::EntryKind::Blob,
-            attrs_blob,
-        )
-        .map_err(|e| format!("{e}"))?;
-    editor
-        .upsert(
-            b".gitvendors".as_bstr(),
-            gix::objs::tree::EntryKind::Blob,
-            vendors_blob,
-        )
-        .map_err(|e| format!("{e}"))?;
-    Ok(editor.write().map_err(|e| format!("{e}"))?.detach())
-}
-
-/// Mint a vendor merge commit using `tree` and advance HEAD.
-///
-/// In squash mode a parentless squash commit is minted and used as the
-/// second parent; in merge mode the upstream commit is used directly.
-fn commit_and_advance(
-    repo: &gix::Repository,
-    entry: &VendorEntry,
-    merge: &git_vendor::VendorMerge,
-    tree: gix::ObjectId,
-    parent: gix::ObjectId,
-    message: &str,
-) -> Result<()> {
-    let author = author_sig(repo)?;
-    let committer = committer_sig(repo)?;
-
-    let mut tbuf_a = gix::date::parse::TimeBuf::default();
-    let mut tbuf_c = gix::date::parse::TimeBuf::default();
-
-    let second_parent = if entry.mode == VendorMode::Squash {
-        let upstream_tree = repo.upstream_tree(entry, merge.upstream_commit)?;
-        let squash = gix::objs::Commit {
-            tree: upstream_tree,
-            parents: Default::default(),
-            author: author.to_ref(&mut tbuf_a).into(),
-            committer: committer.to_ref(&mut tbuf_c).into(),
-            encoding: None,
-            message: format!(
-                "squash: vendor '{}'\n\nSquashed-upstream: {}\n",
-                entry.name, merge.upstream_commit
-            )
-            .into(),
-            extra_headers: Vec::new(),
-        };
-        repo.write_object(&squash)?.detach()
-    } else {
-        merge.upstream_commit
-    };
-
-    let mut tbuf_a2 = gix::date::parse::TimeBuf::default();
-    let mut tbuf_c2 = gix::date::parse::TimeBuf::default();
-    let commit = gix::objs::Commit {
-        tree,
-        parents: [parent, second_parent].into_iter().collect(),
-        author: author.to_ref(&mut tbuf_a2).into(),
-        committer: committer.to_ref(&mut tbuf_c2).into(),
-        encoding: None,
-        message: message.into(),
-        extra_headers: Vec::new(),
-    };
-    let new_commit = repo.write_object(&commit)?.detach();
-    advance_head(repo, new_commit, parent, message)
 }
 
 fn name_from_url(url: &str) -> Option<String> {
