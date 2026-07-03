@@ -757,7 +757,7 @@ impl VendorWorktree for gix::Repository {
             .filter_map(|line| {
                 let (pattern, attr) = split_attr_line(line)?;
                 if attr == attr_bytes {
-                    Some(pattern.into_owned())
+                    Some(unescape_attr_pattern(&pattern))
                 } else {
                     None
                 }
@@ -770,7 +770,7 @@ impl VendorWorktree for gix::Repository {
         }
         for path in paths {
             if !already_tracked.contains(path.as_bytes()) {
-                out.extend_from_slice(path.as_bytes());
+                out.extend_from_slice(&escape_attr_pattern(path.as_bytes()));
                 out.push(b' ');
                 out.extend_from_slice(attr_bytes);
                 out.push(b'\n');
@@ -805,7 +805,10 @@ impl VendorWorktree for gix::Repository {
         let mut filtered: Vec<u8> = Vec::with_capacity(existing.len());
         for line in existing.lines() {
             let keep = match split_attr_line(line) {
-                Some((pattern, attr)) => !(attr == attr_bytes && remove.contains(pattern.as_ref())),
+                Some((pattern, attr)) => {
+                    !(attr == attr_bytes
+                        && remove.contains(unescape_attr_pattern(&pattern).as_slice()))
+                }
                 None => true,
             };
             if keep {
@@ -865,6 +868,39 @@ fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+/// Escape glob metacharacters (`*`, `?`, `[`) and a pattern-initial `!` or `#`
+/// with a backslash, so `path` matches only itself as a `.gitattributes`
+/// pattern. `check_attr_pattern` already rejects a raw `\` in the input, so
+/// every backslash in the result is unambiguously one we inserted here.
+fn escape_attr_pattern(path: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(path.len());
+    for (i, &b) in path.iter().enumerate() {
+        if matches!(b, b'*' | b'?' | b'[') || (i == 0 && matches!(b, b'!' | b'#')) {
+            out.push(b'\\');
+        }
+        out.push(b);
+    }
+    out
+}
+
+/// Inverse of [`escape_attr_pattern`].
+fn unescape_attr_pattern(pattern: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pattern.len());
+    let mut i = 0;
+    while i < pattern.len() {
+        if pattern[i] == b'\\'
+            && i + 1 < pattern.len()
+            && (matches!(pattern[i + 1], b'*' | b'?' | b'[')
+                || (i == 0 && matches!(pattern[i + 1], b'!' | b'#')))
+        {
+            i += 1;
+        }
+        out.push(pattern[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Parse one `.gitattributes` line into `(unquoted_pattern, trimmed_attrs)`.

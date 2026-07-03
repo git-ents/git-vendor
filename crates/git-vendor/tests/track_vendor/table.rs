@@ -158,3 +158,44 @@ fn bare_repo_returns_no_workdir_error() {
         .unwrap_err();
     assert!(matches!(err, git_vendor::Error::NoWorkdir), "{err:?}");
 }
+
+/// A path containing a glob metacharacter (`*`) is written with it escaped,
+/// so the pattern matches only that literal path rather than becoming a live
+/// glob. Regression: `track_vendor` wrote the raw path bytes verbatim, so a
+/// file named `a*.txt` produced the pattern `a*.txt`, matching unrelated
+/// siblings too.
+#[test]
+fn glob_metacharacter_is_escaped_in_written_pattern() {
+    let b = build_without_attributes();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .track_vendor(&entry(), &[b"vendor/a*.txt".as_bstr()])
+        .expect("track_vendor");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    assert_eq!(content, "vendor/a\\*.txt vendor=mylib\n");
+}
+
+/// Tracking the same glob-metacharacter path twice does not duplicate the
+/// line: dedup must compare against the *unescaped* path, not the raw
+/// written pattern.
+#[test]
+fn glob_metacharacter_path_dedup_survives_escaping() {
+    let b = build_without_attributes();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .track_vendor(&entry(), &[b"vendor/a*.txt".as_bstr()])
+        .expect("first call");
+    b.repo
+        .track_vendor(&entry(), &[b"vendor/a*.txt".as_bstr()])
+        .expect("second call");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    let count = content
+        .lines()
+        .filter(|l| *l == "vendor/a\\*.txt vendor=mylib")
+        .count();
+    assert_eq!(count, 1, "line must appear exactly once: {content:?}");
+}

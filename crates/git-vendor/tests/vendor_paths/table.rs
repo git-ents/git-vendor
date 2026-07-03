@@ -10,8 +10,10 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use git_vendor::{PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _};
-use gix::bstr::BString;
+use git_vendor::{
+    PatternMapping, VendorEntry, VendorMode, VendorName, VendorRepository as _, VendorWorktree as _,
+};
+use gix::bstr::{BString, ByteSlice as _};
 use rstest::rstest;
 
 use crate::support::{commit, git, init, write};
@@ -745,5 +747,37 @@ fn empty_tree_selects_nothing() {
         repo.vendor_paths(&entry("libfoo", vec![]), ours)
             .expect("vendor_paths")
             .is_empty()
+    );
+}
+
+// ── Glob-metacharacter paths ────────────────────────────────────────────────
+
+/// A tracked path containing a glob metacharacter (`*`) must resolve to only
+/// itself, not to unrelated siblings the raw (unescaped) glob would also
+/// match. Regression: `track_vendor` wrote the raw path bytes verbatim as the
+/// `.gitattributes` pattern, so a file literally named `a*` produced the live
+/// glob `vendor/mylib/a*`, matching any sibling starting with `a`.
+#[test]
+fn glob_metacharacter_path_does_not_leak_to_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    init(p);
+    write(p, "vendor/mylib/a*", b"literal");
+    write(p, "vendor/mylib/aXtxt", b"sibling");
+    git(&["add", "-A"], p);
+    git(&["commit", "-m", "initial"], p);
+    let repo = gix::open(p).expect("gix open");
+
+    repo.track_vendor(&entry("mylib", vec![]), &[b"vendor/mylib/a*".as_bstr()])
+        .expect("track_vendor");
+    git(&["add", "-A"], p);
+    git(&["commit", "-m", "track"], p);
+
+    let ours = repo.head_commit().expect("head commit").id().detach();
+    assert_eq!(
+        repo.vendor_paths(&entry("mylib", vec![]), ours)
+            .expect("vendor_paths"),
+        &[BString::from("vendor/mylib/a*")],
+        "only the literal path must be selected, not the unrelated sibling",
     );
 }
