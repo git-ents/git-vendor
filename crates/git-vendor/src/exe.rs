@@ -445,6 +445,7 @@ impl Executor {
                     if abs.symlink_metadata().is_ok() {
                         std::fs::remove_file(&abs)?;
                     }
+                    remove_empty_ancestors(&abs, workdir);
                 }
             }
 
@@ -521,6 +522,22 @@ fn require_entry(config: &VendorConfig, name: &str) -> Result<VendorEntry> {
     config
         .get(name)?
         .ok_or_else(|| format!("no vendor named {name:?}").into())
+}
+
+/// Remove `path`'s parent directory and each ancestor above it, as long as
+/// they're empty and still inside `workdir`. Stops at the first non-empty or
+/// out-of-bounds directory.
+fn remove_empty_ancestors(path: &Path, workdir: &Path) {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d == workdir || !d.starts_with(workdir) {
+            break;
+        }
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
 }
 
 /// Resolve `name` to a single-entry list, or all configured vendors if omitted.
