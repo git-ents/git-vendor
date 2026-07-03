@@ -147,7 +147,7 @@ impl Executor {
 
                 if merge.has_conflicts() {
                     repo.checkout_vendor_conflicted(&entry, &merge)?;
-                    reconcile_tracked_paths(repo, &entry, &[], &new_paths)?;
+                    reconcile_tracked_paths(repo, &entry, &[], &new_paths, io)?;
                     entry.base = Some(merge.upstream_commit);
                     config.insert(&entry)?;
                     let config_str = save_config(&config, &cfg_path)?;
@@ -160,7 +160,7 @@ impl Executor {
                 }
 
                 let _full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-                reconcile_tracked_paths(repo, &entry, &[], &new_paths)?;
+                reconcile_tracked_paths(repo, &entry, &[], &new_paths, io)?;
 
                 entry.base = Some(merge.upstream_commit);
                 config.insert(&entry)?;
@@ -264,7 +264,7 @@ impl Executor {
 
             if merge.has_conflicts() {
                 repo.checkout_vendor_conflicted(&entry, &merge)?;
-                reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+                reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?;
                 entry.base = Some(merge.upstream_commit);
                 config.insert(&entry)?;
                 let config_str = save_config(&config, &cfg_path)?;
@@ -277,7 +277,8 @@ impl Executor {
             }
 
             let full_tree = repo.checkout_vendor(&entry, merge.result_tree)?;
-            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
+                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
 
             entry.base = Some(merge.upstream_commit);
             config.insert(&entry)?;
@@ -386,7 +387,8 @@ impl Executor {
             git_vendor::validate_trackable_paths(&path_refs)?;
 
             let full_tree = repo.checkout_vendor(&entry, new_tree)?;
-            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths)?;
+            let attrs_blob = reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
+                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before applying")?;
             let vendors_blob = stage_gitvendors(repo, config_str.as_bytes())?;
             let tree = final_tree(repo, full_tree, attrs_blob, vendors_blob)?;
 
@@ -657,13 +659,43 @@ fn author_sig(repo: &gix::Repository) -> Result<gix::actor::Signature> {
         .map_err(|e| format!("author time: {e}").into())
 }
 
+/// Whether `path` currently has any unmerged (non-zero-stage) entry in the
+/// index — i.e. it is itself part of an unresolved conflict.
+fn has_unmerged_stages(repo: &gix::Repository, path: &gix::bstr::BStr) -> Result<bool> {
+    let index = repo.open_index().map_err(|e| format!("{e}"))?;
+    Ok(index.entries().iter().any(|e| {
+        e.path(&index) == path && e.flags.stage() != gix::index::entry::Stage::Unconflicted
+    }))
+}
+
+/// Update `.gitattributes` tracking for a vendor's path set.
+///
+/// A vendor whose destination pattern maps onto `.gitattributes` itself can
+/// leave that path with unmerged stages after `checkout_vendor_conflicted`
+/// spliced in a genuine merge conflict on it. Writing new tracking lines in
+/// that case would silently collapse the conflict to a single resolved
+/// stage-0 entry, so `git commit` would succeed despite the unresolved
+/// conflict. When that happens, this leaves the unmerged stages untouched and
+/// returns `None` instead.
 fn reconcile_tracked_paths(
     repo: &gix::Repository,
     entry: &VendorEntry,
     old_paths: &[gix::bstr::BString],
     new_paths: &[gix::bstr::BString],
-) -> Result<gix::ObjectId> {
-    use gix::bstr::BStr;
+    io: &mut Io,
+) -> Result<Option<gix::ObjectId>> {
+    use gix::bstr::{BStr, ByteSlice as _};
+
+    if has_unmerged_stages(repo, b".gitattributes".as_bstr())? {
+        writeln!(
+            io.err,
+            "{}: .gitattributes itself is part of this conflict; resolve it \
+             manually, including the vendor={} tracking lines, before committing",
+            entry.name, entry.name,
+        )?;
+        return Ok(None);
+    }
+
     let track: Vec<&BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
     let attrs_oid = repo.track_vendor(entry, &track)?;
 
@@ -677,9 +709,9 @@ fn reconcile_tracked_paths(
     if !removed.is_empty()
         && let Some(oid) = repo.untrack_vendor(entry, &removed)?
     {
-        return Ok(oid);
+        return Ok(Some(oid));
     }
-    Ok(attrs_oid)
+    Ok(Some(attrs_oid))
 }
 
 /// Write `content` as a blob, upsert the `.gitvendors` index entry, and return
@@ -877,6 +909,135 @@ mod tests {
         assert_eq!(
             head_after, concurrent,
             "the concurrent commit must remain HEAD after the stale write is rejected"
+        );
+    }
+
+    fn test_entry() -> VendorEntry {
+        VendorEntry {
+            name: VendorName::new("mylib").unwrap(),
+            url: "unused".to_owned(),
+            ref_name: None,
+            base: None,
+            patterns: Vec::new(),
+            mode: VendorMode::Merge,
+        }
+    }
+
+    /// `reconcile_tracked_paths` must not collapse a genuine unresolved merge
+    /// conflict on `.gitattributes` itself into a single resolved stage-0
+    /// entry: doing so would let `git commit` silently record the
+    /// conflict-marker text as if it were normal content. Regression: the
+    /// function always called `track_vendor`, which reads and rewrites
+    /// `.gitattributes`, then `stage_gitattributes` unconditionally replaced
+    /// whatever stages were there with one stage-0 entry.
+    #[test]
+    fn skips_write_when_gitattributes_itself_is_conflicted() {
+        use git_vendor::{ConflictStages, VendorMerge};
+
+        let dir = tempfile::tempdir().unwrap();
+        git(&["init", "-q", "-b", "main"], dir.path());
+        git(&["config", "user.email", "t@example.com"], dir.path());
+        git(&["config", "user.name", "T"], dir.path());
+        std::fs::write(dir.path().join(".gitattributes"), "* text=auto\n").unwrap();
+        git(&["add", "."], dir.path());
+        git(&["commit", "-q", "-m", "init"], dir.path());
+
+        let repo = gix::open(dir.path()).expect("gix open");
+        let entry = test_entry();
+
+        let base_blob = repo
+            .write_object(gix::objs::BlobRef {
+                data: b"* text=auto\n",
+            })
+            .expect("write base blob")
+            .detach();
+        let ours_blob = repo
+            .write_object(gix::objs::BlobRef {
+                data: b"* text=auto\nours=1\n",
+            })
+            .expect("write ours blob")
+            .detach();
+        let theirs_blob = repo
+            .write_object(gix::objs::BlobRef {
+                data: b"* text=auto\ntheirs=1\n",
+            })
+            .expect("write theirs blob")
+            .detach();
+        let conflict_marker_blob = repo
+            .write_object(gix::objs::BlobRef {
+                data: b"<<<<<<< ours\nours=1\n=======\ntheirs=1\n>>>>>>> theirs\n",
+            })
+            .expect("write conflict-marker blob")
+            .detach();
+
+        let blob_mode = gix::objs::tree::EntryMode::from(gix::objs::tree::EntryKind::Blob);
+        let head_tree = repo
+            .head_commit()
+            .expect("head")
+            .tree_id()
+            .expect("tree")
+            .detach();
+        let mut editor = repo
+            .find_tree(head_tree)
+            .expect("find tree")
+            .edit()
+            .expect("edit");
+        editor
+            .upsert(
+                ".gitattributes",
+                gix::objs::tree::EntryKind::Blob,
+                conflict_marker_blob,
+            )
+            .expect("upsert conflicted .gitattributes");
+        let result_tree = editor.write().expect("write tree").detach();
+
+        let merge = VendorMerge {
+            upstream_commit: repo.head_commit().expect("head").id().detach(),
+            ancestor_tree: None,
+            result_tree,
+            conflicts: vec![ConflictStages {
+                path: ".gitattributes".to_owned(),
+                stages: [
+                    Some((blob_mode, base_blob)),
+                    Some((blob_mode, ours_blob)),
+                    Some((blob_mode, theirs_blob)),
+                ],
+            }],
+        };
+
+        repo.checkout_vendor_conflicted(&entry, &merge)
+            .expect("checkout_vendor_conflicted");
+
+        let new_paths = tree_paths(&repo, merge.result_tree).expect("tree_paths");
+        let mut io = Io {
+            out: Box::new(Vec::new()),
+            err: Box::new(Vec::new()),
+        };
+        let result = reconcile_tracked_paths(&repo, &entry, &[], &new_paths, &mut io)
+            .expect("reconcile_tracked_paths");
+        assert!(
+            result.is_none(),
+            "must skip and return None when .gitattributes itself is conflicted",
+        );
+
+        let index = repo.open_index().expect("open_index");
+        use gix::bstr::ByteSlice as _;
+        let stages: Vec<_> = index
+            .entries()
+            .iter()
+            .filter(|e| e.path(&index) == b".gitattributes".as_bstr())
+            .map(|e| e.flags.stage())
+            .collect();
+        assert_eq!(
+            stages.len(),
+            3,
+            "all three unmerged stages must survive, got {stages:?}",
+        );
+        assert!(
+            stages
+                .iter()
+                .all(|s| *s != gix::index::entry::Stage::Unconflicted),
+            "no stage should have been collapsed to stage 0, got {stages:?}",
         );
     }
 }
