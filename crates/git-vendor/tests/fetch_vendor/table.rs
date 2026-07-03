@@ -111,8 +111,9 @@ fn fetch_force_updates_on_upstream_rewrite() {
     );
 }
 
-/// Fetching an annotated tag stores the tag object at `refs/vendor/<name>` but
-/// returns the tag's ultimate (peeled) target, per the documented contract.
+/// Fetching an annotated tag returns the tag's ultimate (peeled) target and
+/// stores that same peeled commit at `refs/vendor/<name>` — never the tag
+/// object itself, per the documented contract.
 #[test]
 fn fetch_peels_annotated_tag() {
     let upstream = tempfile::tempdir().unwrap();
@@ -132,8 +133,8 @@ fn fetch_peels_annotated_tag() {
     let reference = repo.find_reference(&entry.vendor_ref()).expect("find ref");
     assert_eq!(
         reference.id().detach(),
-        tag_obj,
-        "stored ref must point at the tag object itself",
+        commit,
+        "stored ref must point directly at the peeled commit, not the tag object",
     );
 }
 
@@ -318,5 +319,18 @@ fn fetch_returns_upstream_tip_into_non_bare_local() {
         has_marker,
         "fetched tree lacks the upstream-only `up/marker.txt`: upstream \
          objects were not actually brought into the local odb",
+    );
+
+    // 3. `vendor_tip` (and by extension `vendor_status`) must read the same
+    //    corrected value back from `refs/vendor/<name>`, not the
+    //    gix#2613-corrupted symref pointing at the local branch.
+    let tip = repo
+        .vendor_tip(&entry)
+        .expect("vendor_tip")
+        .expect("some tip");
+    assert_eq!(
+        tip, upstream_head,
+        "vendor_tip must not resolve the gix#2613-corrupted symref to the \
+         local branch",
     );
 }

@@ -34,9 +34,9 @@ fn is_unsafe_local_path(path: &gix::bstr::BStr) -> bool {
 
 impl VendorRepository for gix::Repository {
     /// Fetches `entry.tracking_ref()` from `entry.url` into `refs/vendor/<name>`
-    /// and returns the *peeled* tip OID. When the tracked ref is an annotated
-    /// tag, the returned id is the tag's ultimate target, not the tag object
-    /// stored at `refs/vendor/<name>`.
+    /// and returns the *peeled* tip OID. `refs/vendor/<name>` is always written
+    /// to point directly at that same peeled OID, even when the tracked ref is
+    /// an annotated tag — the tag object itself is never stored there.
     ///
     /// If the local ref is already up to date, the ref tip's existing object hash
     /// is returned.
@@ -148,6 +148,20 @@ impl VendorRepository for gix::Repository {
                     entry.name
                 ))
             })?;
+
+        // Force `refs/vendor/<name>` to point directly at `id`, overwriting
+        // whatever gix wrote for it (see the gix#2613 note above: it may be a
+        // symref into the local branch namespace rather than a direct ref to
+        // the fetched commit). This keeps `vendor_tip`/`vendor_status`, which
+        // read the ref directly, from resolving the corrupted symref.
+        self.reference(
+            entry.vendor_ref(),
+            id,
+            gix::refs::transaction::PreviousValue::Any,
+            format!("fetch {}", entry.tracking_ref()),
+        )
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+
         Ok(id)
     }
 
