@@ -467,10 +467,15 @@ impl Executor {
         let entry = require_entry(&config, &name)?;
 
         let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
+        let paths = match head_oid {
+            Some(oid) => repo.vendor_paths(&entry, oid)?,
+            // No commit yet: resolve from the staged index instead, since
+            // there is no tree to read paths from (e.g. right after `add`).
+            None => git_vendor::resolve_vendor_paths_uncommitted(repo, &entry)?,
+        };
 
-        if let Some(oid) = head_oid {
+        {
             use gix::bstr::ByteSlice as _;
-            let paths = repo.vendor_paths(&entry, oid)?;
             let path_refs: Vec<&gix::bstr::BStr> = paths.iter().map(|b| b.as_ref()).collect();
 
             if !keep_files {

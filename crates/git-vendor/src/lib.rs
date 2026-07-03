@@ -560,6 +560,42 @@ fn resolve_vendor_paths(
     Ok(paths)
 }
 
+/// Like [`resolve_vendor_paths`], but resolves against the current on-disk
+/// index instead of a commit's tree. For use on an unborn `HEAD`, where
+/// staged entries exist (e.g. right after `add`) but there is no commit yet
+/// to read a tree from. Index entries are always files, so no tree-vs-blob
+/// filtering is needed.
+pub fn resolve_vendor_paths_uncommitted(
+    repo: &gix::Repository,
+    entry: &VendorEntry,
+) -> Result<Vec<gix::bstr::BString>, Error> {
+    let index = repo.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
+    let mut stack = repo.attributes_only(
+        &index,
+        gix::worktree::stack::state::attributes::Source::IdMapping,
+    )?;
+    let mut outcome = stack.selected_attribute_matches(["vendor"]);
+
+    let mut paths = Vec::new();
+    for e in index.entries() {
+        let path = e.path(&index).to_owned();
+        let platform = stack.at_entry(path.as_bstr(), None)?;
+        outcome.reset();
+        platform.matching_attributes(&mut outcome);
+        let is_ours = outcome.iter_selected().any(|m| {
+            matches!(
+                m.assignment.state,
+                gix::attrs::StateRef::Value(v)
+                    if v.as_bstr() == entry.name.as_bytes().as_bstr()
+            )
+        });
+        if is_ours {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
 // ── worktree impl ────────────────────────────────────────────────────────────
 
 impl VendorWorktree for gix::Repository {

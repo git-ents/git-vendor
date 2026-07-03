@@ -84,3 +84,41 @@ fn remove_keep_files_still_untracks_gitattributes() {
         "staged .gitattributes must not reference the removed vendor, but was:\n{staged}",
     );
 }
+
+/// `remove` on an unborn HEAD (before the first commit) must actually remove
+/// the vendor, not just its `.gitvendors` entry. Regression: file deletion,
+/// `untrack_vendor`, and index cleanup were all gated on `repo.head_commit()`
+/// succeeding, so on an unborn HEAD `remove` reported success while leaving
+/// vendored files on disk, in the index, and in `.gitattributes`.
+#[test]
+fn remove_before_first_commit_removes_vendor() {
+    let upstream = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+
+    make_upstream(upstream.path());
+    init(local.path());
+
+    let url = upstream.path().to_str().unwrap();
+    vendor_ok(&["add", url, "mylib"], local.path());
+
+    vendor_ok(&["remove", "mylib"], local.path());
+
+    assert!(
+        !local.path().join("vendor/mylib/hello.txt").exists(),
+        "remove must delete vendored files even on an unborn HEAD",
+    );
+
+    let tracked = String::from_utf8(git_capture(&["ls-files"], local.path())).unwrap();
+    assert!(
+        !tracked.lines().any(|l| l.starts_with("vendor/mylib/")),
+        "no vendor/mylib/* path should remain in the index, but ls-files was:\n{tracked}",
+    );
+
+    if local.path().join(".gitattributes").exists() {
+        let contents = std::fs::read_to_string(local.path().join(".gitattributes")).unwrap();
+        assert!(
+            !contents.contains("vendor=mylib"),
+            ".gitattributes must not reference the removed vendor, but was:\n{contents}",
+        );
+    }
+}
