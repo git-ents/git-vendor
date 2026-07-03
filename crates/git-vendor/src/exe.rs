@@ -466,22 +466,26 @@ impl Executor {
 
         let entry = require_entry(&config, &name)?;
 
-        if !keep_files {
-            let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
+        let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
 
-            if let Some(oid) = head_oid {
-                use gix::bstr::ByteSlice as _;
+        if let Some(oid) = head_oid {
+            use gix::bstr::ByteSlice as _;
+            let paths = repo.vendor_paths(&entry, oid)?;
+            let path_refs: Vec<&gix::bstr::BStr> = paths.iter().map(|b| b.as_ref()).collect();
+
+            if !keep_files {
                 let workdir = repo.workdir().ok_or("not a working-copy repository")?;
-                let paths = repo.vendor_paths(&entry, oid)?;
                 for p in &paths {
                     let abs = workdir.join(gix::path::from_bstr(p).as_ref());
                     if abs.symlink_metadata().is_ok() {
                         std::fs::remove_file(&abs)?;
                     }
                 }
-                let path_refs: Vec<&gix::bstr::BStr> = paths.iter().map(|b| b.as_ref()).collect();
-                repo.untrack_vendor(&entry, &path_refs)?;
+            }
 
+            repo.untrack_vendor(&entry, &path_refs)?;
+
+            if !keep_files {
                 let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
                 for p in &path_refs {
                     let pb = p.as_bytes();
