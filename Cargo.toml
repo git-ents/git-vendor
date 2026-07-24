@@ -14,7 +14,7 @@ missing_docs = "warn"
 [workspace.dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
 clap_mangen = "0.2.31"
-gix = { version = "0.83", features = ["attributes", "merge", "tree-editor", "blocking-network-client", "worktree-mutation", "blocking-http-transport-reqwest-rust-tls"] }
+gix = { version = "0.83", features = ["attributes", "merge", "tree-editor", "blocking-network-client", "worktree-mutation", "blocking-http-transport-reqwest-native-tls"] }
 gix-glob = "0.26.0"
 gix-quote = "0.7"
 tempfile = "3"
