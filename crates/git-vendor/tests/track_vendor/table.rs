@@ -177,6 +177,25 @@ fn glob_metacharacter_is_escaped_in_written_pattern() {
     assert_eq!(content, "vendor/a\\*.txt vendor=mylib\n");
 }
 
+/// A path whose first component starts with `#` is accepted (not rejected as
+/// unquotable) and written with the leading `#` escaped, so the line is not
+/// mistaken for a comment. Round-trips through dedup without duplicating.
+#[test]
+fn leading_hash_path_is_escaped_not_rejected() {
+    let b = build_without_attributes();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .track_vendor(&entry(), &[b"#notes.txt".as_bstr()])
+        .expect("track_vendor");
+    b.repo
+        .track_vendor(&entry(), &[b"#notes.txt".as_bstr()])
+        .expect("second call");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    assert_eq!(content, "\\#notes.txt vendor=mylib\n");
+}
+
 /// Tracking the same glob-metacharacter path twice does not duplicate the
 /// line: dedup must compare against the *unescaped* path, not the raw
 /// written pattern.

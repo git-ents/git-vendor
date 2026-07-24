@@ -121,6 +121,25 @@ fn no_gitattributes_is_noop() {
     assert!(!attrs_path.exists(), ".gitattributes must not be created");
 }
 
+/// A hand-edited line carrying extra attributes alongside `vendor=<name>`
+/// is recognized (token-wise, not whole-tail) and has only the `vendor=<name>`
+/// attribute stripped — the other attributes and the line survive.
+#[test]
+fn strips_only_vendor_token_from_multi_attribute_line() {
+    let b = build_with_attributes(b"vendor/a.txt vendor=mylib text=auto\n");
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .untrack_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
+        .expect("untrack_vendor");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    assert_eq!(
+        content, "vendor/a.txt text=auto\n",
+        "only the vendor= token must be dropped, keeping other attributes",
+    );
+}
+
 /// A bare repo returns `Error::NoWorkdir`.
 #[test]
 fn bare_repo_returns_no_workdir_error() {

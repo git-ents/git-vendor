@@ -212,11 +212,11 @@ fn stale_live_symlink_is_removed() {
     assert!(workdir.join("README").exists());
 }
 
-/// After all vendor files are removed the parent directory is left behind —
-/// `remove_file` does not prune empty directories. This test pins that
-/// current behavior.
+/// After all vendor files are removed the now-empty parent directory is
+/// pruned, matching `remove`'s behavior (and git's own checkout, which does
+/// not leave emptied directories behind).
 #[test]
-fn stale_empty_vendor_directory_is_not_pruned() {
+fn stale_empty_vendor_directory_is_pruned() {
     let b = build();
     let workdir = b.repo.workdir().unwrap().to_owned();
     // New tree carries no vendor files; both old vendor files are removed.
@@ -228,8 +228,8 @@ fn stale_empty_vendor_directory_is_not_pruned() {
     assert!(!workdir.join("vendor/old.txt").exists());
     assert!(!workdir.join("vendor/keep.txt").exists());
     assert!(
-        workdir.join("vendor").is_dir(),
-        "emptied vendor/ dir is left behind by the current impl",
+        !workdir.join("vendor").exists(),
+        "emptied vendor/ dir must be pruned after its last file is removed",
     );
 }
 

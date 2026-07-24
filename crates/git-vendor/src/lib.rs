@@ -599,11 +599,7 @@ pub fn resolve_vendor_paths_uncommitted(
 // ── worktree impl ────────────────────────────────────────────────────────────
 
 impl VendorWorktree for gix::Repository {
-    fn checkout_vendor(
-        &self,
-        entry: &VendorEntry,
-        tree: gix::ObjectId,
-    ) -> Result<gix::ObjectId, Error> {
+    fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error> {
         // IMPORTANT
         // This is the trust boundary where upstream content (carried verbatim
         // through `upstream_tree`, including symlink and gitlink modes,
@@ -656,27 +652,16 @@ impl VendorWorktree for gix::Repository {
             if abs.symlink_metadata().is_ok() {
                 std::fs::remove_file(&abs)?;
             }
+            remove_empty_ancestors(&abs, workdir);
         }
 
-        // The tree returned to callers still overlays the vendor tree onto the
-        // full HEAD tree (an unborn HEAD has no base commit, so the vendor
-        // tree is itself the whole tree) — callers need this OID to mint
-        // commits regardless of what the on-disk index looks like.
-        let full_tree = match head_id {
-            Some(id) => self.vendor_overlay(entry, id, tree)?,
-            None => tree,
-        };
-
-        // The on-disk index, however, must not be derived from `full_tree`:
-        // that overlay reads from HEAD, never the index, so any entry staged
-        // but not yet committed (an addition or modification) would be
+        // The on-disk index must not be derived from an overlay of the vendor
+        // tree onto HEAD: that reads from HEAD, never the index, so any entry
+        // staged but not yet committed (an addition or modification) would be
         // silently dropped. Instead, start from the actual current index —
         // or an empty one if none exists yet — and surgically apply only this
         // vendor's own path changes, leaving every other entry untouched.
-        let mut main_index = match self.open_index() {
-            Ok(idx) => idx,
-            Err(_) => self.index_from_tree(&gix::ObjectId::empty_tree(self.object_hash()))?,
-        };
+        let mut main_index = open_index_or_empty(self)?;
         main_index.set_path(self.git_dir().join("index"));
 
         for removed in old_paths.difference(&new_paths) {
@@ -697,7 +682,7 @@ impl VendorWorktree for gix::Repository {
             .write(gix::index::write::Options::default())
             .map_err(|e| Error::Gix(Box::new(e)))?;
 
-        Ok(full_tree)
+        Ok(())
     }
 
     fn checkout_vendor_conflicted(
@@ -767,7 +752,7 @@ impl VendorWorktree for gix::Repository {
             .lines()
             .filter_map(|line| {
                 let (pattern, attr) = split_attr_line(line)?;
-                if attr == attr_bytes {
+                if attrs_contain(attr, attr_bytes) {
                     Some(unescape_attr_pattern(&pattern))
                 } else {
                     None
@@ -786,6 +771,12 @@ impl VendorWorktree for gix::Repository {
                 out.extend_from_slice(attr_bytes);
                 out.push(b'\n');
             }
+        }
+
+        if out.is_empty() {
+            // Nothing to track and no pre-existing `.gitattributes`: don't
+            // materialize a phantom empty file on disk or in the index.
+            return Ok(self.write_object(gix::objs::BlobRef { data: b"" })?.detach());
         }
 
         if out != existing {
@@ -815,15 +806,33 @@ impl VendorWorktree for gix::Repository {
 
         let mut filtered: Vec<u8> = Vec::with_capacity(existing.len());
         for line in existing.lines() {
-            let keep = match split_attr_line(line) {
+            let matched = match split_attr_line(line) {
                 Some((pattern, attr)) => {
-                    !(attr == attr_bytes
-                        && remove.contains(unescape_attr_pattern(&pattern).as_slice()))
+                    attrs_contain(attr, attr_bytes)
+                        && remove.contains(unescape_attr_pattern(&pattern).as_slice())
                 }
-                None => true,
+                None => false,
             };
-            if keep {
+            if !matched {
                 filtered.extend_from_slice(line);
+                filtered.push(b'\n');
+                continue;
+            }
+            // The line's pattern is one we're untracking. Drop only the
+            // `vendor=<name>` attribute, preserving any other attributes a
+            // hand edit may have added on the same line; drop the whole line
+            // only when nothing else remains.
+            let (pattern, attr) = split_attr_line(line).expect("matched line re-splits");
+            let remaining: Vec<&[u8]> = attr
+                .split(|b: &u8| b.is_ascii_whitespace())
+                .filter(|t| !t.is_empty() && *t != attr_bytes)
+                .collect();
+            if !remaining.is_empty() {
+                filtered.extend_from_slice(pattern.as_ref());
+                for token in remaining {
+                    filtered.push(b' ');
+                    filtered.extend_from_slice(token);
+                }
                 filtered.push(b'\n');
             }
         }
@@ -855,6 +864,39 @@ impl VendorWorktree for gix::Repository {
     }
 }
 
+/// Open the repository index, treating only a missing index file as an empty
+/// index. A corrupt or otherwise unreadable index is a real error and is
+/// propagated — silently degrading it to an empty index would drop every
+/// staged entry, the exact hazard `checkout_vendor`'s surgical index update
+/// exists to avoid.
+fn open_index_or_empty(repo: &gix::Repository) -> Result<gix::index::File, Error> {
+    match repo.open_index() {
+        Ok(idx) => Ok(idx),
+        Err(gix::worktree::open_index::Error::IndexFile(
+            gix::index::file::init::Error::Io(io),
+        )) if io.kind() == std::io::ErrorKind::NotFound => {
+            Ok(repo.index_from_tree(&gix::ObjectId::empty_tree(repo.object_hash()))?)
+        }
+        Err(e) => Err(Error::Gix(Box::new(e))),
+    }
+}
+
+/// Remove `path`'s parent directory and each ancestor above it, as long as
+/// they're empty and still inside `workdir`. Stops at the first non-empty or
+/// out-of-bounds directory.
+fn remove_empty_ancestors(path: &std::path::Path, workdir: &std::path::Path) {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d == workdir || !d.starts_with(workdir) {
+            break;
+        }
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+}
+
 /// Check that every path in `paths` can be written as a plain (unquoted)
 /// `.gitattributes` pattern. Callers that will later checkout files and
 /// mutate the working tree/index should validate paths with this *before*
@@ -868,11 +910,16 @@ pub fn validate_trackable_paths(paths: &[&BStr]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Return `Err` if `path` contains characters that require C-style quoting in
-/// `.gitattributes` (space, tab, `#`, `"`, `\`, or control characters).
-/// Git source paths from tree objects never contain these in practice.
+/// Return `Err` if `path` contains characters that would require C-style
+/// quoting to write as an unquoted `.gitattributes` pattern: whitespace
+/// (space, tab), a literal `"` or `\`, or control characters. A leading `#`
+/// or `!` and glob metacharacters (`*`, `?`, `[`) are *not* rejected here —
+/// [`escape_attr_pattern`] backslash-escapes those so the path still matches
+/// only itself. Quoted-pattern writing is not yet implemented, so a path with
+/// these characters (e.g. one containing a space) cannot currently be
+/// vendored; such paths are uncommon but do occur.
 fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
-    let needs_quoting = |b: u8| b.is_ascii_control() || matches!(b, b' ' | b'#' | b'"' | b'\\');
+    let needs_quoting = |b: u8| b.is_ascii_control() || matches!(b, b' ' | b'"' | b'\\');
     if path.iter().copied().any(needs_quoting) {
         return Err(Error::InvalidPath(
             String::from_utf8_lossy(path).into_owned(),
@@ -914,6 +961,14 @@ fn unescape_attr_pattern(pattern: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Whether `attrs` — the attribute portion of a `.gitattributes` line — lists
+/// `token` as one of its whitespace-separated attributes. Compares tokens
+/// rather than the whole tail so a hand-edited multi-attribute line like
+/// `p vendor=mylib text` is still recognized as carrying `vendor=mylib`.
+fn attrs_contain(attrs: &[u8], token: &[u8]) -> bool {
+    attrs.split(|b: &u8| b.is_ascii_whitespace()).any(|t| t == token)
+}
+
 /// Parse one `.gitattributes` line into `(unquoted_pattern, trimmed_attrs)`.
 ///
 /// Returns `None` for blank lines, comment lines, or lines with no attribute
@@ -948,21 +1003,28 @@ fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
 #[path = "attr_tests.rs"]
 mod tests;
 
-/// Write `content` as a blob into the object database, upsert the
-/// `.gitattributes` index entry to point at it, and return the blob OID.
-fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId, Error> {
+/// Write `content` as a blob into the object database, upsert the index entry
+/// at `path` (a repo-root-relative bytestring) to point at it, and return the
+/// blob OID. Used to stage the tracked control files (`.gitattributes`,
+/// `.gitvendors`) a vendor operation rewrites.
+pub fn stage_file(
+    repo: &gix::Repository,
+    path: &BStr,
+    content: &[u8],
+) -> Result<gix::ObjectId, Error> {
     let blob_oid = repo
         .write_object(gix::objs::BlobRef { data: content })?
         .detach();
 
-    let mut index = repo.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
-    index.remove_entries(|_, path, _| path == b".gitattributes".as_bstr());
+    let mut index = open_index_or_empty(repo)?;
+    index.set_path(repo.git_dir().join("index"));
+    index.remove_entries(|_, p, _| p == path);
     index.dangerously_push_entry(
         gix::index::entry::Stat::default(),
         blob_oid,
         gix::index::entry::Flags::empty(),
         gix::index::entry::Mode::FILE,
-        b".gitattributes".as_bstr(),
+        path,
     );
     index.sort_entries();
     index
@@ -970,4 +1032,8 @@ fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<gix::Ob
         .map_err(|e| Error::Gix(Box::new(e)))?;
 
     Ok(blob_oid)
+}
+
+fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId, Error> {
+    stage_file(repo, b".gitattributes".as_bstr(), content)
 }

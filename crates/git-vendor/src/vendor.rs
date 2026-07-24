@@ -600,15 +600,9 @@ pub trait VendorWorktree {
     /// Update the index and working tree for the vendor's paths to match `tree`.
     ///
     /// Only paths owned by this vendor are written; unrelated files are left
-    /// untouched.
-    /// Returns the full overlaid tree OID (the result of splicing `tree` into
-    /// the parent commit's tree), needed by callers that want to mint a commit
-    /// from the same tree without re-running the overlay.
-    fn checkout_vendor(
-        &self,
-        entry: &VendorEntry,
-        tree: gix::ObjectId,
-    ) -> Result<gix::ObjectId, Error>;
+    /// untouched. Empty ancestor directories left behind by removed paths are
+    /// pruned.
+    fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error>;
 
     /// Project a conflicted merge onto the working copy for manual resolution.
     ///

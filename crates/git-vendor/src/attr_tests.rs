@@ -6,13 +6,16 @@ use super::{check_attr_pattern, split_attr_line};
 #[case(b"vendor/a.txt")]
 #[case(b"src/lib.rs")]
 #[case(b"deep/nested/path.txt")]
+// `#`, `!`, and glob metacharacters are escaped on write, not rejected.
+#[case(b"#readme")]
+#[case(b"!bang")]
+#[case(b"a*.txt")]
 fn check_plain_path_ok(#[case] path: &[u8]) {
     assert!(check_attr_pattern(path).is_ok());
 }
 
 #[rstest]
 #[case(b"vendor/a b.txt")]
-#[case(b"#readme")]
 #[case(b"say \"hi\"")]
 #[case(b"a\tb")]
 #[case(b"a\x01b")]
