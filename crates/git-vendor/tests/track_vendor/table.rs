@@ -133,6 +133,20 @@ fn preserves_unrelated_lines() {
     );
 }
 
+/// A path containing a space is rejected with `Error::InvalidPath`.
+#[test]
+fn path_with_space_returns_invalid_path_error() {
+    let b = build_without_attributes();
+    let err = b
+        .repo
+        .track_vendor(&entry(), &[b"vendor/a b.txt".as_bstr()])
+        .unwrap_err();
+    assert!(
+        matches!(err, git_vendor::Error::InvalidPath(_)),
+        "expected InvalidPath, got {err:?}",
+    );
+}
+
 /// A bare repo returns `Error::NoWorkdir`.
 #[test]
 fn bare_repo_returns_no_workdir_error() {
@@ -143,4 +157,64 @@ fn bare_repo_returns_no_workdir_error() {
         .track_vendor(&entry(), &[b"vendor/a.txt".as_bstr()])
         .unwrap_err();
     assert!(matches!(err, git_vendor::Error::NoWorkdir), "{err:?}");
+}
+
+/// A path containing a glob metacharacter (`*`) is written with it escaped,
+/// so the pattern matches only that literal path rather than becoming a live
+/// glob. Regression: `track_vendor` wrote the raw path bytes verbatim, so a
+/// file named `a*.txt` produced the pattern `a*.txt`, matching unrelated
+/// siblings too.
+#[test]
+fn glob_metacharacter_is_escaped_in_written_pattern() {
+    let b = build_without_attributes();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .track_vendor(&entry(), &[b"vendor/a*.txt".as_bstr()])
+        .expect("track_vendor");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    assert_eq!(content, "vendor/a\\*.txt vendor=mylib\n");
+}
+
+/// A path whose first component starts with `#` is accepted (not rejected as
+/// unquotable) and written with the leading `#` escaped, so the line is not
+/// mistaken for a comment. Round-trips through dedup without duplicating.
+#[test]
+fn leading_hash_path_is_escaped_not_rejected() {
+    let b = build_without_attributes();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .track_vendor(&entry(), &[b"#notes.txt".as_bstr()])
+        .expect("track_vendor");
+    b.repo
+        .track_vendor(&entry(), &[b"#notes.txt".as_bstr()])
+        .expect("second call");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    assert_eq!(content, "\\#notes.txt vendor=mylib\n");
+}
+
+/// Tracking the same glob-metacharacter path twice does not duplicate the
+/// line: dedup must compare against the *unescaped* path, not the raw
+/// written pattern.
+#[test]
+fn glob_metacharacter_path_dedup_survives_escaping() {
+    let b = build_without_attributes();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+
+    b.repo
+        .track_vendor(&entry(), &[b"vendor/a*.txt".as_bstr()])
+        .expect("first call");
+    b.repo
+        .track_vendor(&entry(), &[b"vendor/a*.txt".as_bstr()])
+        .expect("second call");
+
+    let content = std::fs::read_to_string(workdir.join(".gitattributes")).unwrap();
+    let count = content
+        .lines()
+        .filter(|l| *l == "vendor/a\\*.txt vendor=mylib")
+        .count();
+    assert_eq!(count, 1, "line must appear exactly once: {content:?}");
 }

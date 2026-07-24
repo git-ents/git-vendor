@@ -3,10 +3,8 @@
 mod error;
 mod vendor;
 
-pub mod exe;
-
 pub use error::Error;
-use gix::bstr::ByteSlice as _;
+use gix::bstr::{BStr, ByteSlice as _};
 use gix::remote::fetch::{Status, refs::update::Mode};
 pub use vendor::{
     ConflictStages, PatternMapping, VendorConfig, VendorEntry, VendorMerge, VendorMode, VendorName,
@@ -36,9 +34,9 @@ fn is_unsafe_local_path(path: &gix::bstr::BStr) -> bool {
 
 impl VendorRepository for gix::Repository {
     /// Fetches `entry.tracking_ref()` from `entry.url` into `refs/vendor/<name>`
-    /// and returns the *peeled* tip OID. When the tracked ref is an annotated
-    /// tag, the returned id is the tag's ultimate target, not the tag object
-    /// stored at `refs/vendor/<name>`.
+    /// and returns the *peeled* tip OID. `refs/vendor/<name>` is always written
+    /// to point directly at that same peeled OID, even when the tracked ref is
+    /// an annotated tag — the tag object itself is never stored there.
     ///
     /// If the local ref is already up to date, the ref tip's existing object hash
     /// is returned.
@@ -57,14 +55,7 @@ impl VendorRepository for gix::Repository {
             | gix::url::Scheme::Http
             | gix::url::Scheme::Ssh
             | gix::url::Scheme::Git => {}
-            gix::url::Scheme::File => {
-                if !self.is_bare() {
-                    return Err(Error::InvalidUrl(format!(
-                        "{}: refusing transport `{:?}`; local transports are not yet supported",
-                        entry.url, url.scheme
-                    )));
-                }
-            }
+            gix::url::Scheme::File => {}
             ref other => {
                 return Err(Error::InvalidUrl(format!(
                     "{}: refusing transport `{other:?}`; plug-in transports are not supported",
@@ -128,8 +119,61 @@ impl VendorRepository for gix::Repository {
             }
         }
 
-        let mut reference = self.find_reference(&entry.vendor_ref())?;
-        let id = reference.peel_to_id()?.detach();
+        // Read the upstream OID from the refmap rather than by re-reading the
+        // local vendor ref.  When the remote advertises HEAD as a symbolic ref
+        // (e.g. `HEAD → refs/heads/main`) and the local repo happens to have a
+        // branch of the same name, gix writes `refs/vendor/<name>` as a symref
+        // pointing to that local branch; `peel_to_id()` would then silently
+        // return the *local* HEAD instead of the upstream tip.  The refmap
+        // carries the actual upstream OID directly before any local ref
+        // resolution, so keying on it sidesteps the bug entirely.
+        // Upstream: https://github.com/GitoxideLabs/gitoxide/issues/2613
+        let vendor_ref = entry.vendor_ref();
+        let id = outcome
+            .ref_map
+            .mappings
+            .iter()
+            .find(|m| {
+                m.local
+                    .as_deref()
+                    .map(|l| l == vendor_ref.as_bytes())
+                    .unwrap_or(false)
+            })
+            .and_then(|m| m.remote.peeled_id())
+            .map(gix::oid::to_owned)
+            .ok_or_else(|| {
+                Error::Fetch(format!(
+                    "remote has no ref matching `{}` for vendor `{}`",
+                    entry.tracking_ref(),
+                    entry.name
+                ))
+            })?;
+
+        // `peeled_id()` only returns a peeled value when the ref advertisement
+        // carried one; fetching an annotated tag by its own object SHA
+        // (`Source::ObjectId`) has no such advertisement, so `id` may still be
+        // the tag object itself. Peel explicitly so callers always get a commit.
+        let id = self
+            .find_object(id)
+            .map_err(|e| Error::Gix(Box::new(e)))?
+            .peel_to_commit()
+            .map_err(|e| Error::Gix(Box::new(e)))?
+            .id()
+            .detach();
+
+        // Force `refs/vendor/<name>` to point directly at `id`, overwriting
+        // whatever gix wrote for it (see the gix#2613 note above: it may be a
+        // symref into the local branch namespace rather than a direct ref to
+        // the fetched commit). This keeps `vendor_tip`/`vendor_status`, which
+        // read the ref directly, from resolving the corrupted symref.
+        self.reference(
+            entry.vendor_ref(),
+            id,
+            gix::refs::transaction::PreviousValue::Any,
+            format!("fetch {}", entry.tracking_ref()),
+        )
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+
         Ok(id)
     }
 
@@ -514,4 +558,482 @@ fn resolve_vendor_paths(
         }
     }
     Ok(paths)
+}
+
+/// Like [`resolve_vendor_paths`], but resolves against the current on-disk
+/// index instead of a commit's tree. For use on an unborn `HEAD`, where
+/// staged entries exist (e.g. right after `add`) but there is no commit yet
+/// to read a tree from. Index entries are always files, so no tree-vs-blob
+/// filtering is needed.
+pub fn resolve_vendor_paths_uncommitted(
+    repo: &gix::Repository,
+    entry: &VendorEntry,
+) -> Result<Vec<gix::bstr::BString>, Error> {
+    let index = repo.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
+    let mut stack = repo.attributes_only(
+        &index,
+        gix::worktree::stack::state::attributes::Source::IdMapping,
+    )?;
+    let mut outcome = stack.selected_attribute_matches(["vendor"]);
+
+    let mut paths = Vec::new();
+    for e in index.entries() {
+        let path = e.path(&index).to_owned();
+        let platform = stack.at_entry(path.as_bstr(), None)?;
+        outcome.reset();
+        platform.matching_attributes(&mut outcome);
+        let is_ours = outcome.iter_selected().any(|m| {
+            matches!(
+                m.assignment.state,
+                gix::attrs::StateRef::Value(v)
+                    if v.as_bstr() == entry.name.as_bytes().as_bstr()
+            )
+        });
+        if is_ours {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+// ── worktree impl ────────────────────────────────────────────────────────────
+
+impl VendorWorktree for gix::Repository {
+    fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error> {
+        // IMPORTANT
+        // This is the trust boundary where upstream content (carried verbatim
+        // through `upstream_tree`, including symlink and gitlink modes,
+        // mirroring git-subtree/submodule) reaches the working copy. Like
+        // core git's `verify_path`/checkout, projection MUST refuse to write
+        // through a symlinked leading path and reject `..`/absolute
+        // components — use gix-worktree's checked checkout, never naive
+        // `std::fs` writes. See the `upstream_tree` adversarial review (#5).
+        // NOTE
+        // Path-traversal safety (e.g. `../` components, symlinked leading
+        // paths) is delegated to gix and is not covered by automated tests.
+        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
+
+        let head_id = self.head_commit().ok().map(|c| c.id().detach());
+
+        let old_paths: std::collections::BTreeSet<gix::bstr::BString> = head_id
+            .and_then(|id| resolve_vendor_paths(self, entry, id).ok())
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let mut vendor_index = self.index_from_tree(&tree)?;
+
+        let new_paths: std::collections::BTreeSet<gix::bstr::BString> = vendor_index
+            .entries()
+            .iter()
+            .map(|e| e.path(&vendor_index).to_owned())
+            .collect();
+
+        let opts = self
+            .checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)
+            .map_err(|e| Error::Gix(Box::new(e)))?;
+        let progress = gix::progress::Discard;
+        gix::worktree::state::checkout(
+            &mut vendor_index,
+            workdir,
+            self.objects.clone().into_arc().map_err(Error::Io)?,
+            &progress,
+            &progress,
+            &gix::interrupt::IS_INTERRUPTED,
+            gix::worktree::state::checkout::Options {
+                overwrite_existing: true,
+                ..opts
+            },
+        )
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+
+        for removed in old_paths.difference(&new_paths) {
+            let abs = workdir.join(gix::path::from_bstr(removed).as_ref());
+            if abs.symlink_metadata().is_ok() {
+                std::fs::remove_file(&abs)?;
+            }
+            remove_empty_ancestors(&abs, workdir);
+        }
+
+        // The on-disk index must not be derived from an overlay of the vendor
+        // tree onto HEAD: that reads from HEAD, never the index, so any entry
+        // staged but not yet committed (an addition or modification) would be
+        // silently dropped. Instead, start from the actual current index —
+        // or an empty one if none exists yet — and surgically apply only this
+        // vendor's own path changes, leaving every other entry untouched.
+        let mut main_index = open_index_or_empty(self)?;
+        main_index.set_path(self.git_dir().join("index"));
+
+        for removed in old_paths.difference(&new_paths) {
+            main_index.remove_entries(|_, p, _| p == removed.as_bstr());
+        }
+        for e in vendor_index.entries() {
+            let path = e.path(&vendor_index).to_owned();
+            main_index.remove_entries(|_, p, _| p == path.as_bstr());
+            main_index.dangerously_push_entry(e.stat, e.id, e.flags, e.mode, path.as_bstr());
+        }
+        main_index.sort_entries();
+        // `remove_entries`/`dangerously_push_entry` don't update the index's
+        // cached-tree extension, so a stale one would make a native `git
+        // commit` skip rehashing changed subtrees and record the wrong tree.
+        main_index.remove_tree();
+
+        main_index
+            .write(gix::index::write::Options::default())
+            .map_err(|e| Error::Gix(Box::new(e)))?;
+
+        Ok(())
+    }
+
+    fn checkout_vendor_conflicted(
+        &self,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
+    ) -> Result<(), Error> {
+        use gix::bstr::ByteSlice as _;
+
+        self.checkout_vendor(entry, merge.result_tree)?;
+
+        // Reopen the index we just wrote so we can splice in unmerged stages.
+        let mut main_index = self.open_index().map_err(|e| Error::Gix(Box::new(e)))?;
+        main_index.set_path(self.git_dir().join("index"));
+
+        for conflict in &merge.conflicts {
+            let path_bytes = gix::bstr::BString::from(conflict.path.as_bytes());
+            let path_bstr = path_bytes.as_bstr();
+
+            main_index.remove_entries(|_, p, _| p == path_bstr);
+
+            for (stage_idx, stage_variant) in [
+                (0usize, gix::index::entry::Stage::Base),
+                (1usize, gix::index::entry::Stage::Ours),
+                (2usize, gix::index::entry::Stage::Theirs),
+            ] {
+                if let Some((tree_mode, oid)) = conflict.stages[stage_idx] {
+                    let mode = gix::index::entry::Mode::from(tree_mode);
+                    let flags = gix::index::entry::Flags::from_stage(stage_variant);
+                    main_index.dangerously_push_entry(
+                        gix::index::entry::Stat::default(),
+                        oid,
+                        flags,
+                        mode,
+                        path_bstr,
+                    );
+                }
+            }
+        }
+
+        main_index.sort_entries();
+        main_index
+            .write(gix::index::write::Options::default())
+            .map_err(|e| Error::Gix(Box::new(e)))?;
+
+        Ok(())
+    }
+
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<gix::ObjectId, Error> {
+        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
+        let gitattributes = workdir.join(".gitattributes");
+
+        let existing: Vec<u8> = if gitattributes.exists() {
+            std::fs::read(&gitattributes)?
+        } else {
+            Vec::new()
+        };
+
+        let attr_value = format!("vendor={}", entry.name.as_str());
+        let attr_bytes = attr_value.as_bytes();
+
+        for path in paths {
+            check_attr_pattern(path.as_bytes())?;
+        }
+
+        let already_tracked: std::collections::HashSet<Vec<u8>> = existing
+            .lines()
+            .filter_map(|line| {
+                let (pattern, attr) = split_attr_line(line)?;
+                if attrs_contain(attr, attr_bytes) {
+                    Some(unescape_attr_pattern(&pattern))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut out = existing.clone();
+        if !out.is_empty() && out.last() != Some(&b'\n') {
+            out.push(b'\n');
+        }
+        for path in paths {
+            if !already_tracked.contains(path.as_bytes()) {
+                out.extend_from_slice(&escape_attr_pattern(path.as_bytes()));
+                out.push(b' ');
+                out.extend_from_slice(attr_bytes);
+                out.push(b'\n');
+            }
+        }
+
+        if out.is_empty() {
+            // Nothing to track and no pre-existing `.gitattributes`: don't
+            // materialize a phantom empty file on disk or in the index.
+            return Ok(self.write_object(gix::objs::BlobRef { data: b"" })?.detach());
+        }
+
+        if out != existing {
+            std::fs::write(&gitattributes, &out)?;
+        }
+
+        stage_gitattributes(self, &out)
+    }
+
+    fn untrack_vendor(
+        &self,
+        entry: &VendorEntry,
+        paths: &[&BStr],
+    ) -> Result<Option<gix::ObjectId>, Error> {
+        let workdir = self.workdir().ok_or(Error::NoWorkdir)?;
+        let gitattributes = workdir.join(".gitattributes");
+
+        if !gitattributes.exists() {
+            return Ok(None);
+        }
+
+        let existing: Vec<u8> = std::fs::read(&gitattributes)?;
+        let attr_value = format!("vendor={}", entry.name.as_str());
+        let attr_bytes = attr_value.as_bytes();
+
+        let remove: std::collections::HashSet<&[u8]> = paths.iter().map(|b| b.as_bytes()).collect();
+
+        let mut filtered: Vec<u8> = Vec::with_capacity(existing.len());
+        for line in existing.lines() {
+            let matched = match split_attr_line(line) {
+                Some((pattern, attr)) => {
+                    attrs_contain(attr, attr_bytes)
+                        && remove.contains(unescape_attr_pattern(&pattern).as_slice())
+                }
+                None => false,
+            };
+            if !matched {
+                filtered.extend_from_slice(line);
+                filtered.push(b'\n');
+                continue;
+            }
+            // The line's pattern is one we're untracking. Drop only the
+            // `vendor=<name>` attribute, preserving any other attributes a
+            // hand edit may have added on the same line; drop the whole line
+            // only when nothing else remains.
+            let (pattern, attr) = split_attr_line(line).expect("matched line re-splits");
+            let remaining: Vec<&[u8]> = attr
+                .split(|b: &u8| b.is_ascii_whitespace())
+                .filter(|t| !t.is_empty() && *t != attr_bytes)
+                .collect();
+            if !remaining.is_empty() {
+                filtered.extend_from_slice(pattern.as_ref());
+                for token in remaining {
+                    filtered.push(b' ');
+                    filtered.extend_from_slice(token);
+                }
+                filtered.push(b'\n');
+            }
+        }
+
+        if filtered != existing {
+            std::fs::write(&gitattributes, &filtered)?;
+        }
+
+        Ok(Some(stage_gitattributes(self, &filtered)?))
+    }
+
+    fn prepare_merge(
+        &self,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
+        message: &str,
+    ) -> Result<(), Error> {
+        let git_dir = self.git_dir();
+        if entry.mode == VendorMode::Squash {
+            std::fs::write(git_dir.join("SQUASH_MSG"), message.as_bytes())?;
+        } else {
+            std::fs::write(
+                git_dir.join("MERGE_HEAD"),
+                format!("{}\n", merge.upstream_commit),
+            )?;
+            std::fs::write(git_dir.join("MERGE_MSG"), message.as_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+/// Open the repository index, treating only a missing index file as an empty
+/// index. A corrupt or otherwise unreadable index is a real error and is
+/// propagated — silently degrading it to an empty index would drop every
+/// staged entry, the exact hazard `checkout_vendor`'s surgical index update
+/// exists to avoid.
+fn open_index_or_empty(repo: &gix::Repository) -> Result<gix::index::File, Error> {
+    match repo.open_index() {
+        Ok(idx) => Ok(idx),
+        Err(gix::worktree::open_index::Error::IndexFile(
+            gix::index::file::init::Error::Io(io),
+        )) if io.kind() == std::io::ErrorKind::NotFound => {
+            Ok(repo.index_from_tree(&gix::ObjectId::empty_tree(repo.object_hash()))?)
+        }
+        Err(e) => Err(Error::Gix(Box::new(e))),
+    }
+}
+
+/// Remove `path`'s parent directory and each ancestor above it, as long as
+/// they're empty and still inside `workdir`. Stops at the first non-empty or
+/// out-of-bounds directory.
+fn remove_empty_ancestors(path: &std::path::Path, workdir: &std::path::Path) {
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d == workdir || !d.starts_with(workdir) {
+            break;
+        }
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+}
+
+/// Check that every path in `paths` can be written as a plain (unquoted)
+/// `.gitattributes` pattern. Callers that will later checkout files and
+/// mutate the working tree/index should validate paths with this *before*
+/// doing so, so an invalid path aborts cleanly instead of leaving a
+/// half-applied checkout behind — see [`check_attr_pattern`] for what's
+/// rejected.
+pub fn validate_trackable_paths(paths: &[&BStr]) -> Result<(), Error> {
+    for p in paths {
+        check_attr_pattern(p.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Return `Err` if `path` contains characters that would require C-style
+/// quoting to write as an unquoted `.gitattributes` pattern: whitespace
+/// (space, tab), a literal `"` or `\`, or control characters. A leading `#`
+/// or `!` and glob metacharacters (`*`, `?`, `[`) are *not* rejected here —
+/// [`escape_attr_pattern`] backslash-escapes those so the path still matches
+/// only itself. Quoted-pattern writing is not yet implemented, so a path with
+/// these characters (e.g. one containing a space) cannot currently be
+/// vendored; such paths are uncommon but do occur.
+fn check_attr_pattern(path: &[u8]) -> Result<(), Error> {
+    let needs_quoting = |b: u8| b.is_ascii_control() || matches!(b, b' ' | b'"' | b'\\');
+    if path.iter().copied().any(needs_quoting) {
+        return Err(Error::InvalidPath(
+            String::from_utf8_lossy(path).into_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Escape glob metacharacters (`*`, `?`, `[`) and a pattern-initial `!` or `#`
+/// with a backslash, so `path` matches only itself as a `.gitattributes`
+/// pattern. `check_attr_pattern` already rejects a raw `\` in the input, so
+/// every backslash in the result is unambiguously one we inserted here.
+fn escape_attr_pattern(path: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(path.len());
+    for (i, &b) in path.iter().enumerate() {
+        if matches!(b, b'*' | b'?' | b'[') || (i == 0 && matches!(b, b'!' | b'#')) {
+            out.push(b'\\');
+        }
+        out.push(b);
+    }
+    out
+}
+
+/// Inverse of [`escape_attr_pattern`].
+fn unescape_attr_pattern(pattern: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pattern.len());
+    let mut i = 0;
+    while i < pattern.len() {
+        if pattern[i] == b'\\'
+            && i + 1 < pattern.len()
+            && (matches!(pattern[i + 1], b'*' | b'?' | b'[')
+                || (i == 0 && matches!(pattern[i + 1], b'!' | b'#')))
+        {
+            i += 1;
+        }
+        out.push(pattern[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Whether `attrs` — the attribute portion of a `.gitattributes` line — lists
+/// `token` as one of its whitespace-separated attributes. Compares tokens
+/// rather than the whole tail so a hand-edited multi-attribute line like
+/// `p vendor=mylib text` is still recognized as carrying `vendor=mylib`.
+fn attrs_contain(attrs: &[u8], token: &[u8]) -> bool {
+    attrs.split(|b: &u8| b.is_ascii_whitespace()).any(|t| t == token)
+}
+
+/// Parse one `.gitattributes` line into `(unquoted_pattern, trimmed_attrs)`.
+///
+/// Returns `None` for blank lines, comment lines, or lines with no attribute
+/// separator.  Handles both plain and C-style-quoted patterns using
+/// [`gix_quote::ansi_c::undo`].
+fn split_attr_line(line: &[u8]) -> Option<(std::borrow::Cow<'_, [u8]>, &[u8])> {
+    if line.is_empty() || line[0] == b'#' {
+        return None;
+    }
+    if line.starts_with(b"\"") {
+        let (pattern, consumed) = gix_quote::ansi_c::undo(line.as_bstr()).ok()?;
+        let rest = line.get(consumed..)?;
+        if rest.first().is_some_and(|&b| b == b' ' || b == b'\t') {
+            let owned: Vec<u8> = pattern.as_ref().to_vec();
+            Some((std::borrow::Cow::Owned(owned), rest[1..].trim()))
+        } else {
+            None
+        }
+    } else {
+        let pos = line.iter().position(|&b| b == b' ' || b == b'\t')?;
+        if pos == 0 {
+            return None;
+        }
+        Some((
+            std::borrow::Cow::Borrowed(&line[..pos]),
+            line[pos + 1..].trim(),
+        ))
+    }
+}
+
+#[cfg(test)]
+#[path = "attr_tests.rs"]
+mod tests;
+
+/// Write `content` as a blob into the object database, upsert the index entry
+/// at `path` (a repo-root-relative bytestring) to point at it, and return the
+/// blob OID. Used to stage the tracked control files (`.gitattributes`,
+/// `.gitvendors`) a vendor operation rewrites.
+pub fn stage_file(
+    repo: &gix::Repository,
+    path: &BStr,
+    content: &[u8],
+) -> Result<gix::ObjectId, Error> {
+    let blob_oid = repo
+        .write_object(gix::objs::BlobRef { data: content })?
+        .detach();
+
+    let mut index = open_index_or_empty(repo)?;
+    index.set_path(repo.git_dir().join("index"));
+    index.remove_entries(|_, p, _| p == path);
+    index.dangerously_push_entry(
+        gix::index::entry::Stat::default(),
+        blob_oid,
+        gix::index::entry::Flags::empty(),
+        gix::index::entry::Mode::FILE,
+        path,
+    );
+    index.sort_entries();
+    index
+        .write(gix::index::write::Options::default())
+        .map_err(|e| Error::Gix(Box::new(e)))?;
+
+    Ok(blob_oid)
+}
+
+fn stage_gitattributes(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId, Error> {
+    stage_file(repo, b".gitattributes".as_bstr(), content)
 }

@@ -212,11 +212,11 @@ fn stale_live_symlink_is_removed() {
     assert!(workdir.join("README").exists());
 }
 
-/// After all vendor files are removed the parent directory is left behind —
-/// `remove_file` does not prune empty directories. This test pins that
-/// current behavior.
+/// After all vendor files are removed the now-empty parent directory is
+/// pruned, matching `remove`'s behavior (and git's own checkout, which does
+/// not leave emptied directories behind).
 #[test]
-fn stale_empty_vendor_directory_is_not_pruned() {
+fn stale_empty_vendor_directory_is_pruned() {
     let b = build();
     let workdir = b.repo.workdir().unwrap().to_owned();
     // New tree carries no vendor files; both old vendor files are removed.
@@ -228,8 +228,8 @@ fn stale_empty_vendor_directory_is_not_pruned() {
     assert!(!workdir.join("vendor/old.txt").exists());
     assert!(!workdir.join("vendor/keep.txt").exists());
     assert!(
-        workdir.join("vendor").is_dir(),
-        "emptied vendor/ dir is left behind by the current impl",
+        !workdir.join("vendor").exists(),
+        "emptied vendor/ dir must be pruned after its last file is removed",
     );
 }
 
@@ -272,4 +272,49 @@ fn index_entries_are_sorted_after_checkout() {
     let mut sorted = paths.clone();
     sorted.sort();
     assert_eq!(paths, sorted, "index entries must be sorted after checkout");
+}
+
+/// A file staged but not yet committed must survive `checkout_vendor`.
+/// Regression: the on-disk index was rebuilt from `full_tree`, which overlays
+/// the vendor tree onto *HEAD's* committed tree — never the index — so any
+/// staged-but-uncommitted addition was silently dropped from the index.
+#[test]
+fn staged_uncommitted_addition_is_preserved() {
+    let b = build();
+    let workdir = b.repo.workdir().unwrap().to_owned();
+    write(&workdir, "newfile.txt", b"staged\n");
+    git(&["add", "newfile.txt"], &workdir);
+
+    let tree = build_tree(&b.repo, &[("vendor/keep.txt", b"v2\n")]);
+    b.repo.checkout_vendor(&entry(), tree).expect("checkout");
+
+    let paths = index_paths(&b.repo);
+    assert!(
+        paths.contains(&"newfile.txt".to_owned()),
+        "staged addition must survive checkout: {paths:?}",
+    );
+}
+
+/// The same regression on an unborn `HEAD`: staging a file before the first
+/// commit, then running `checkout_vendor`, must not wipe out the entire
+/// pre-existing index (there is no committed tree to fall back to at all in
+/// this case, so the old behavior dropped every staged entry).
+#[test]
+fn staged_uncommitted_addition_survives_unborn_head_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    write(dir.path(), "README", b"local readme\n");
+    git(&["add", "README"], dir.path());
+    // No commit — HEAD is unborn.
+    let repo = gix::open(dir.path()).unwrap();
+
+    let tree = build_tree(&repo, &[("vendor/new.txt", b"new\n")]);
+    repo.checkout_vendor(&entry(), tree)
+        .expect("checkout into unborn HEAD");
+
+    let paths = index_paths(&repo);
+    assert!(
+        paths.contains(&"README".to_owned()),
+        "pre-existing staged entry must survive checkout: {paths:?}",
+    );
 }

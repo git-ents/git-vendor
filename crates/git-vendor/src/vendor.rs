@@ -600,7 +600,8 @@ pub trait VendorWorktree {
     /// Update the index and working tree for the vendor's paths to match `tree`.
     ///
     /// Only paths owned by this vendor are written; unrelated files are left
-    /// untouched.
+    /// untouched. Empty ancestor directories left behind by removed paths are
+    /// pruned.
     fn checkout_vendor(&self, entry: &VendorEntry, tree: gix::ObjectId) -> Result<(), Error>;
 
     /// Project a conflicted merge onto the working copy for manual resolution.
@@ -624,14 +625,32 @@ pub trait VendorWorktree {
     ) -> Result<(), Error>;
 
     /// Add the given paths to the vendor's local content filter by writing
-    /// `vendor=<name>` entries into the working-copy `.gitattributes`.
+    /// `vendor=<name>` entries into the working-copy `.gitattributes` and
+    /// staging the updated file into the index.
     ///
     /// This authors local-side membership (read back by
     /// [`VendorRepository::vendor_paths`](crate::VendorRepository::vendor_paths));
     /// it is independent of the upstream pattern filter.
-    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
+    fn track_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<gix::ObjectId, Error>;
 
     /// Remove the given paths from the vendor's content filter, deleting their
-    /// `vendor=<name>` entries from the working-copy `.gitattributes`.
-    fn untrack_vendor(&self, entry: &VendorEntry, paths: &[&BStr]) -> Result<(), Error>;
+    /// `vendor=<name>` entries from the working-copy `.gitattributes` and
+    /// staging the updated file into the index.
+    fn untrack_vendor(
+        &self,
+        entry: &VendorEntry,
+        paths: &[&BStr],
+    ) -> Result<Option<gix::ObjectId>, Error>;
+
+    /// Stage the merge result for a subsequent `git commit`.
+    ///
+    /// Writes `MERGE_HEAD` + `MERGE_MSG` (merge mode) or `SQUASH_MSG` (squash
+    /// mode) so that the user's own `git commit` produces the right commit
+    /// shape and has the default message pre-filled.
+    fn prepare_merge(
+        &self,
+        entry: &VendorEntry,
+        merge: &VendorMerge,
+        message: &str,
+    ) -> Result<(), Error>;
 }
