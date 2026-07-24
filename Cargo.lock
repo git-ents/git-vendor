@@ -604,6 +604,7 @@ dependencies = [
 name = "git-vendor"
 version = "1.0.0-alpha.1"
 dependencies = [
+ "anyhow",
  "clap",
  "clap_mangen",
  "git-set-attr",

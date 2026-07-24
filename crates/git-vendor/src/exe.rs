@@ -8,7 +8,87 @@ use git_vendor::{
 
 use crate::cli;
 
-type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Errors surfaced by the `git-vendor` executor.
+///
+/// Each application-level failure gets its own variant so `main` (and any other
+/// caller) can match on it rather than string-sniff — in particular
+/// [`Error::Conflict`], which signals that the working tree has been staged
+/// with conflict markers and the process should exit non-zero *without*
+/// printing a further message. Errors from the vendoring library and from
+/// filesystem I/O are wrapped transparently; lower-level `gix` plumbing errors
+/// are boxed into [`Error::Gix`], mirroring [`git_vendor::Error`].
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The current directory is not inside a git repository.
+    #[error(transparent)]
+    Discover(#[from] Box<gix::discover::Error>),
+
+    /// The repository has no working copy (it is bare).
+    #[error("not a working-copy repository")]
+    NotWorkingCopy,
+
+    /// A vendor with the requested name already exists.
+    #[error("vendor {0:?} already exists; use `git vendor update {0}` or remove it first")]
+    VendorExists(String),
+
+    /// No vendor with the requested name is configured.
+    #[error("no vendor named {0:?}")]
+    NoSuchVendor(String),
+
+    /// No name was given and none could be derived from the URL.
+    #[error("cannot derive a vendor name from URL {0:?}; pass a name explicitly")]
+    UndeterminableName(String),
+
+    /// `.gitattributes` carries an unresolved conflict that blocks the update.
+    #[error("`.gitattributes` has an unresolved conflict; resolve it before updating")]
+    GitattributesConflict,
+
+    /// Reading `HEAD` failed.
+    #[error("HEAD: {0}")]
+    Head(#[source] Box<gix::reference::head_commit::Error>),
+
+    /// The merge left unresolved conflicts. The working tree has already been
+    /// staged and actionable guidance printed to stderr; `main` exits non-zero
+    /// without rendering this error.
+    #[error("unresolved merge conflict")]
+    Conflict,
+
+    /// An error from the vendoring library.
+    #[error(transparent)]
+    Vendor(#[from] git_vendor::Error),
+
+    /// A filesystem I/O error.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    /// A lower-level `gix` error with no more specific variant.
+    #[error(transparent)]
+    Gix(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+macro_rules! impl_gix_from {
+    ($($ty:path),* $(,)?) => {
+        $(
+            impl From<$ty> for Error {
+                fn from(e: $ty) -> Self {
+                    Error::Gix(Box::new(e))
+                }
+            }
+        )*
+    };
+}
+
+impl_gix_from! {
+    gix::repository::index_from_tree::Error,
+    gix::object::find::existing::with_conversion::Error,
+    gix::object::commit::Error,
+    gix::worktree::open_index::Error,
+    gix::reference::find::Error,
+    gix::reference::edit::Error,
+    gix::index::file::write::Error,
+}
 
 pub struct Io {
     pub out: Box<dyn std::io::Write>,
@@ -24,22 +104,11 @@ impl Io {
     }
 }
 
-#[derive(Debug)]
-pub struct ConflictExit;
-
-impl std::fmt::Display for ConflictExit {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
-    }
-}
-
-impl std::error::Error for ConflictExit {}
-
 pub struct Executor(pub gix::Repository);
 
 impl Executor {
     pub fn discover() -> Result<Self> {
-        Ok(Self(gix::discover(".")?))
+        Ok(Self(gix::discover(".").map_err(Box::new)?))
     }
 
     pub fn run(&self, cli: cli::Cli, io: &mut Io) -> Result<()> {
@@ -88,16 +157,11 @@ impl Executor {
 
         let name = match name {
             Some(n) => n,
-            None => name_from_url(&url).ok_or_else(|| {
-                format!("cannot derive a vendor name from URL {url:?}; pass a name explicitly")
-            })?,
+            None => name_from_url(&url).ok_or_else(|| Error::UndeterminableName(url.clone()))?,
         };
         let vendor_name = VendorName::new(&name)?;
         if config.get(vendor_name.as_str())?.is_some() {
-            return Err(format!(
-                "vendor {name:?} already exists; use `git vendor update {name}` or remove it first"
-            )
-            .into());
+            return Err(Error::VendorExists(name.clone()));
         }
         let mode = if squash {
             VendorMode::Squash
@@ -153,7 +217,7 @@ impl Executor {
                     io,
                 )?;
                 if conflicted {
-                    return Err(ConflictExit.into());
+                    return Err(Error::Conflict);
                 }
                 writeln!(io.err, "Staged; run `git commit` to complete.")?;
             }
@@ -214,7 +278,7 @@ impl Executor {
         let head_oid = repo
             .head_commit()
             .map(|c| c.id().detach())
-            .map_err(|e| format!("HEAD: {e}"))?;
+            .map_err(|e| Error::Head(Box::new(e)))?;
 
         let total = entries.len();
         for (i, mut entry) in entries.into_iter().enumerate() {
@@ -260,7 +324,7 @@ impl Executor {
                 io,
             )?;
             if conflicted {
-                return Err(ConflictExit.into());
+                return Err(Error::Conflict);
             }
             writeln!(io.err, "Updated {n}. Run `git commit` to record the merge.")?;
 
@@ -287,7 +351,7 @@ impl Executor {
     /// (conflicted or clean), reconciles `.gitattributes`, records the new
     /// base, and stages `.gitvendors`. Returns `Ok(true)` if the merge left
     /// conflicts, having already printed the conflict message — the caller
-    /// should return `Err(ConflictExit)`. `require_reconcile` controls
+    /// should return `Err(Error::Conflict)`. `require_reconcile` controls
     /// whether an unresolved `.gitattributes` conflict on a clean merge is
     /// itself treated as an error (true for `update`, which has old paths to
     /// reconcile against; false for `add`'s first-merge case, which has none).
@@ -326,7 +390,7 @@ impl Executor {
         let reconciled = reconcile_tracked_paths(repo, entry, old_paths, &new_paths, io)?;
         if require_reconcile {
             reconciled
-                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
+                .ok_or(Error::GitattributesConflict)?;
         }
 
         entry.base = Some(merge.upstream_commit);
@@ -355,7 +419,7 @@ impl Executor {
         let head_oid = repo
             .head_commit()
             .map(|c| c.id().detach())
-            .map_err(|e| format!("HEAD: {e}"))?;
+            .map_err(|e| Error::Head(Box::new(e)))?;
 
         // Patterns as last committed, for the local-modification check: a vendor
         // whose ours tree differs from the pristine upstream tree of its recorded
@@ -396,7 +460,7 @@ impl Executor {
 
             repo.checkout_vendor(&entry, new_tree)?;
             reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
-                .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
+                .ok_or(Error::GitattributesConflict)?;
             stage_gitvendors(repo, &cfg_bytes)?;
 
             writeln!(
@@ -466,7 +530,7 @@ impl Executor {
             let path_refs: Vec<&gix::bstr::BStr> = paths.iter().map(|b| b.as_ref()).collect();
 
             if !keep_files {
-                let workdir = repo.workdir().ok_or("not a working-copy repository")?;
+                let workdir = repo.workdir().ok_or(Error::NotWorkingCopy)?;
                 for p in &paths {
                     let abs = workdir.join(gix::path::from_bstr(p).as_ref());
                     if abs.symlink_metadata().is_ok() {
@@ -479,15 +543,13 @@ impl Executor {
             repo.untrack_vendor(&entry, &path_refs)?;
 
             if !keep_files {
-                let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
+                let mut index = repo.open_index()?;
                 for p in &path_refs {
                     let pb = p.as_bytes();
                     index.remove_entries(|_, path, _| path == pb.as_bstr());
                 }
                 index.sort_entries();
-                index
-                    .write(gix::index::write::Options::default())
-                    .map_err(|e| format!("{e}"))?;
+                index.write(gix::index::write::Options::default())?;
             }
         }
 
@@ -532,7 +594,7 @@ impl Executor {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn config_path(repo: &gix::Repository) -> Result<PathBuf> {
-    let workdir = repo.workdir().ok_or("not a working-copy repository")?;
+    let workdir = repo.workdir().ok_or(Error::NotWorkingCopy)?;
     Ok(workdir.join(".gitvendors"))
 }
 
@@ -554,7 +616,7 @@ fn save_config(config: &VendorConfig, path: &Path) -> Result<String> {
 fn require_entry(config: &VendorConfig, name: &str) -> Result<VendorEntry> {
     config
         .get(name)?
-        .ok_or_else(|| format!("no vendor named {name:?}").into())
+        .ok_or_else(|| Error::NoSuchVendor(name.to_owned()))
 }
 
 /// Remove `path`'s parent directory and each ancestor above it, as long as
@@ -648,18 +710,14 @@ fn tree_blobs(
 }
 
 fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<VendorConfig>> {
-    let tree = repo
-        .find_commit(commit)
-        .map_err(|e| format!("{e}"))?
-        .tree()
-        .map_err(|e| format!("{e}"))?;
+    let tree = repo.find_commit(commit)?.tree()?;
     let Some(entry) = tree
         .lookup_entry_by_path(".gitvendors")
-        .map_err(|e| format!("{e}"))?
+        .map_err(|e| Error::Gix(Box::new(e)))?
     else {
         return Ok(None);
     };
-    let blob = entry.object().map_err(|e| format!("{e}"))?;
+    let blob = entry.object().map_err(|e| Error::Gix(Box::new(e)))?;
     // Error on invalid UTF-8 rather than lossily mangling a `.gitvendors` whose
     // bytes we'd otherwise silently corrupt.
     Ok(Some(VendorConfig::open_from_bytes(&blob.data)?))
@@ -668,7 +726,7 @@ fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Ven
 /// Whether `path` currently has any unmerged (non-zero-stage) entry in the
 /// index — i.e. it is itself part of an unresolved conflict.
 fn has_unmerged_stages(repo: &gix::Repository, path: &gix::bstr::BStr) -> Result<bool> {
-    let index = repo.open_index().map_err(|e| format!("{e}"))?;
+    let index = repo.open_index()?;
     Ok(index.entries().iter().any(|e| {
         e.path(&index) == path && e.flags.stage() != gix::index::entry::Stage::Unconflicted
     }))

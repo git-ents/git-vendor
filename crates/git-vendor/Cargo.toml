@@ -21,6 +21,7 @@ name = "git-vendor"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
 clap_mangen.workspace = true
 gix.workspace = true
