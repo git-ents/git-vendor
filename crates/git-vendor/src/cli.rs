@@ -46,7 +46,9 @@ pub enum Command {
         #[arg(long)]
         squash: bool,
 
-        /// Show what would be fetched and merged without making any changes.
+        /// Show what would be fetched and merged without changing the working
+        /// tree, index, or config. Upstream is still fetched into
+        /// `refs/vendor/<name>` so there is something to report on.
         #[arg(long)]
         dry_run: bool,
 
@@ -81,7 +83,9 @@ pub enum Command {
         #[arg(long)]
         no_fetch: bool,
 
-        /// Show what would be fetched and merged without making any changes.
+        /// Show what would be fetched and merged without changing the working
+        /// tree, index, or config. Upstream is still fetched into
+        /// `refs/vendor/<name>` so there is something to report on.
         #[arg(long)]
         dry_run: bool,
     },

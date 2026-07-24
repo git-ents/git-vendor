@@ -85,6 +85,45 @@ fn remove_keep_files_still_untracks_gitattributes() {
     );
 }
 
+/// `remove` on a born HEAD but *before committing the add* must still remove
+/// the vendor's files. Regression: `remove` resolved paths only from HEAD's
+/// tree, which — for a vendor added but not yet committed — carries no
+/// `vendor=<name>` tracking, so it reported success while leaving the files on
+/// disk, in the index, and in `.gitattributes`.
+#[test]
+fn remove_after_uncommitted_add_removes_vendor() {
+    let upstream = tempfile::tempdir().unwrap();
+    let local = tempfile::tempdir().unwrap();
+
+    make_upstream(upstream.path());
+
+    init(local.path());
+    write(local.path(), "README", b"local\n");
+    git(&["add", "-A"], local.path());
+    git(&["commit", "-m", "init"], local.path());
+
+    let url = upstream.path().to_str().unwrap();
+    vendor_ok(&["add", url, "mylib"], local.path());
+    // Deliberately do NOT commit the add — the vendor lives only in the index.
+    vendor_ok(&["remove", "mylib"], local.path());
+
+    assert!(
+        !local.path().join("vendor/mylib/hello.txt").exists(),
+        "remove must delete files from an uncommitted add",
+    );
+    let tracked = String::from_utf8(git_capture(&["ls-files"], local.path())).unwrap();
+    assert!(
+        !tracked.lines().any(|l| l.starts_with("vendor/mylib/")),
+        "no vendor/mylib/* path should remain in the index:\n{tracked}",
+    );
+    let staged =
+        String::from_utf8(git_capture(&["show", ":.gitattributes"], local.path())).unwrap();
+    assert!(
+        !staged.contains("vendor=mylib"),
+        "staged .gitattributes must not reference the removed vendor:\n{staged}",
+    );
+}
+
 /// `remove` on an unborn HEAD (before the first commit) must actually remove
 /// the vendor, not just its `.gitvendors` entry. Regression: file deletion,
 /// `untrack_vendor`, and index cleanup were all gated on `repo.head_commit()`

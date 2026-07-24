@@ -158,13 +158,22 @@ impl Executor {
                 writeln!(io.err, "Staged; run `git commit` to complete.")?;
             }
             None => {
+                // An unborn HEAD has no merge to seal, so the tool writes no
+                // MERGE_MSG and never commits: a `-m` message has nowhere to go.
+                if message.is_some() {
+                    writeln!(
+                        io.err,
+                        "note: --message is ignored on an unborn HEAD; pass it to your own \
+                         `git commit`."
+                    )?;
+                }
                 let tree = repo.upstream_tree(&entry, upstream)?;
                 let new_paths = tree_paths(repo, tree)?;
                 let path_refs: Vec<&gix::bstr::BStr> =
                     new_paths.iter().map(|b| b.as_ref()).collect();
                 git_vendor::validate_trackable_paths(&path_refs)?;
 
-                let _full_tree = repo.checkout_vendor(&entry, tree)?;
+                repo.checkout_vendor(&entry, tree)?;
                 repo.track_vendor(&entry, &path_refs)?;
 
                 entry.base = Some(upstream);
@@ -207,7 +216,8 @@ impl Executor {
             .map(|c| c.id().detach())
             .map_err(|e| format!("HEAD: {e}"))?;
 
-        for mut entry in entries {
+        let total = entries.len();
+        for (i, mut entry) in entries.into_iter().enumerate() {
             let n = entry.name.as_str().to_owned();
             writeln!(io.err, "Fetching {n}…")?;
             let upstream = repo.fetch_vendor(&entry)?;
@@ -258,6 +268,14 @@ impl Executor {
             // octopus merge, so a second vendor's pending merge in the same run
             // would silently clobber this one's. Stop here; re-running `update`
             // after the commit picks up the rest.
+            let remaining = total - i - 1;
+            if remaining > 0 {
+                writeln!(
+                    io.err,
+                    "Stopped after {n}; {remaining} more vendor(s) not yet processed — \
+                     re-run `git vendor update` after committing this merge."
+                )?;
+            }
             break;
         }
 
@@ -304,7 +322,7 @@ impl Executor {
             return Ok(true);
         }
 
-        let _full_tree = repo.checkout_vendor(entry, merge.result_tree)?;
+        repo.checkout_vendor(entry, merge.result_tree)?;
         let reconciled = reconcile_tracked_paths(repo, entry, old_paths, &new_paths, io)?;
         if require_reconcile {
             reconciled
@@ -344,7 +362,10 @@ impl Executor {
         // base carries patches that re-materializing would discard.
         let old_config = config_at(repo, head_oid)?;
 
-        let config_str = save_config(&config, &cfg_path)?;
+        // Stage the user's on-disk `.gitvendors` verbatim, and only when a
+        // vendor is actually rebuilt. Re-serializing it here would normalize
+        // the file's formatting even on a run where every vendor is skipped.
+        let cfg_bytes = std::fs::read(&cfg_path).unwrap_or_default();
 
         for entry in entries {
             let n = entry.name.as_str().to_owned();
@@ -373,10 +394,10 @@ impl Executor {
             let path_refs: Vec<&gix::bstr::BStr> = new_paths.iter().map(|b| b.as_ref()).collect();
             git_vendor::validate_trackable_paths(&path_refs)?;
 
-            let _full_tree = repo.checkout_vendor(&entry, new_tree)?;
+            repo.checkout_vendor(&entry, new_tree)?;
             reconcile_tracked_paths(repo, &entry, &old_paths, &new_paths, io)?
                 .ok_or("`.gitattributes` has an unresolved conflict; resolve it before updating")?;
-            stage_gitvendors(repo, config_str.as_bytes())?;
+            stage_gitvendors(repo, &cfg_bytes)?;
 
             writeln!(
                 io.err,
@@ -426,13 +447,19 @@ impl Executor {
 
         let entry = require_entry(&config, &name)?;
 
+        // Resolve the vendor's paths from HEAD *and* the staged index, unioned.
+        // HEAD alone misses a vendor added but not yet committed (its tracking
+        // lives only in the staged `.gitattributes`, not any committed tree),
+        // which would leave its files on disk, in the index, and in
+        // `.gitattributes` while reporting success.
         let head_oid = repo.head_commit().ok().map(|c| c.id().detach());
-        let paths = match head_oid {
-            Some(oid) => repo.vendor_paths(&entry, oid)?,
-            // No commit yet: resolve from the staged index instead, since
-            // there is no tree to read paths from (e.g. right after `add`).
-            None => git_vendor::resolve_vendor_paths_uncommitted(repo, &entry)?,
-        };
+        let mut path_set: std::collections::BTreeSet<gix::bstr::BString> =
+            std::collections::BTreeSet::new();
+        if let Some(oid) = head_oid {
+            path_set.extend(repo.vendor_paths(&entry, oid)?);
+        }
+        path_set.extend(git_vendor::resolve_vendor_paths_uncommitted(repo, &entry)?);
+        let paths: Vec<gix::bstr::BString> = path_set.into_iter().collect();
 
         {
             use gix::bstr::ByteSlice as _;
@@ -462,6 +489,12 @@ impl Executor {
                     .write(gix::index::write::Options::default())
                     .map_err(|e| format!("{e}"))?;
             }
+        }
+
+        // Drop the private `refs/vendor/<name>` tracking ref so a removed
+        // vendor doesn't leak a ref (and a re-add starts from a clean slate).
+        if let Some(reference) = repo.try_find_reference(&entry.vendor_ref())? {
+            reference.delete()?;
         }
 
         config.remove(&name)?;
@@ -576,7 +609,7 @@ fn locally_modified_paths(
     let our_blobs = tree_blobs(repo, ours)?;
     let mut modified: Vec<String> = our_blobs
         .iter()
-        .filter(|(p, oid)| pristine_blobs.get(*p) != Some(oid))
+        .filter(|(p, entry)| pristine_blobs.get(*p) != Some(entry))
         .map(|(p, _)| p.to_string())
         .collect();
     modified.extend(
@@ -598,15 +631,19 @@ fn tree_paths(repo: &gix::Repository, tree_id: gix::ObjectId) -> Result<Vec<gix:
         .collect())
 }
 
+/// Map each blob path in `tree_id` to its `(oid, mode)`. The mode is included
+/// so an executable-bit-only change (same content, different mode) still reads
+/// as a local modification.
 fn tree_blobs(
     repo: &gix::Repository,
     tree_id: gix::ObjectId,
-) -> Result<std::collections::BTreeMap<gix::bstr::BString, gix::ObjectId>> {
+) -> Result<std::collections::BTreeMap<gix::bstr::BString, (gix::ObjectId, gix::index::entry::Mode)>>
+{
     let index = repo.index_from_tree(&tree_id)?;
     Ok(index
         .entries()
         .iter()
-        .map(|e| (e.path(&index).into(), e.id))
+        .map(|e| (e.path(&index).into(), (e.id, e.mode)))
         .collect())
 }
 
@@ -623,8 +660,9 @@ fn config_at(repo: &gix::Repository, commit: gix::ObjectId) -> Result<Option<Ven
         return Ok(None);
     };
     let blob = entry.object().map_err(|e| format!("{e}"))?;
-    let s = String::from_utf8_lossy(&blob.data).into_owned();
-    Ok(Some(VendorConfig::parse(&s)?))
+    // Error on invalid UTF-8 rather than lossily mangling a `.gitvendors` whose
+    // bytes we'd otherwise silently corrupt.
+    Ok(Some(VendorConfig::open_from_bytes(&blob.data)?))
 }
 
 /// Whether `path` currently has any unmerged (non-zero-stage) entry in the
@@ -682,28 +720,15 @@ fn reconcile_tracked_paths(
     Ok(Some(attrs_oid))
 }
 
-/// Write `content` as a blob, upsert the `.gitvendors` index entry, and return
-/// the blob OID so callers can include it in a commit tree.
+/// Write `content` as a blob and upsert the `.gitvendors` index entry to point
+/// at it, returning the blob OID.
 fn stage_gitvendors(repo: &gix::Repository, content: &[u8]) -> Result<gix::ObjectId> {
     use gix::bstr::ByteSlice as _;
-    let blob_oid = repo
-        .write_object(gix::objs::BlobRef { data: content })
-        .map_err(|e| format!("{e}"))?
-        .detach();
-    let mut index = repo.open_index().map_err(|e| format!("{e}"))?;
-    index.remove_entries(|_, path, _| path == b".gitvendors".as_bstr());
-    index.dangerously_push_entry(
-        gix::index::entry::Stat::default(),
-        blob_oid,
-        gix::index::entry::Flags::empty(),
-        gix::index::entry::Mode::FILE,
+    Ok(git_vendor::stage_file(
+        repo,
         b".gitvendors".as_bstr(),
-    );
-    index.sort_entries();
-    index
-        .write(gix::index::write::Options::default())
-        .map_err(|e| format!("{e}"))?;
-    Ok(blob_oid)
+        content,
+    )?)
 }
 
 fn name_from_url(url: &str) -> Option<String> {
